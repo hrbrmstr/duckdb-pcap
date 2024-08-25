@@ -48,6 +48,7 @@ struct TransportLayerInfo {
   const u_char *payload;
   size_t payload_length;
   vector<string> tcp_flags;
+  uint32_t tcp_seq_num;
 };
 
 bool starts_with_http_verb(const string &payload) {
@@ -62,65 +63,66 @@ bool starts_with_http_verb(const string &payload) {
   return false;
 }
 
-static void ExtractHTTPRequestHeadersFunction(DataChunk &args, ExpressionState &state, Vector &result) {
-    auto &payload_vector = args.data[0];
+static void ExtractHTTPRequestHeadersFunction(DataChunk &args,
+                                              ExpressionState &state,
+                                              Vector &result) {
+  auto &payload_vector = args.data[0];
 
-    UnifiedVectorFormat payload_data;
-    payload_vector.ToUnifiedFormat(args.size(), payload_data);
+  UnifiedVectorFormat payload_data;
+  payload_vector.ToUnifiedFormat(args.size(), payload_data);
 
-    auto payloads = (string_t*)payload_data.data;
+  auto payloads = (string_t *)payload_data.data;
 
-    for (idx_t i = 0; i < args.size(); i++) {
-        idx_t payload_idx = payload_data.sel->get_index(i);
+  for (idx_t i = 0; i < args.size(); i++) {
+    idx_t payload_idx = payload_data.sel->get_index(i);
 
-        if (!payload_data.validity.RowIsValid(payload_idx)) {
-            result.SetValue(i, Value());
-            continue;
-        }
-
-        const string_t &payload_str = payloads[payload_idx];
-        string payload(payload_str.GetDataUnsafe(), payload_str.GetSize());
-
-        if (!starts_with_http_verb(payload)) {
-            result.SetValue(i, Value());
-            continue;
-        }
-
-        vector<Value> headers;
-        size_t pos = payload.find("\r\n");
-        size_t last_pos = pos + 2;
-
-        while (pos != string::npos && last_pos < payload.length()) {
-            pos = payload.find("\r\n", last_pos);
-            if (pos == string::npos) break;
-
-            string header_line = payload.substr(last_pos, pos - last_pos);
-            size_t colon_pos = header_line.find(':');
-
-            if (colon_pos != string::npos) {
-                string key = header_line.substr(0, colon_pos);
-                string value = header_line.substr(colon_pos + 1);
-
-                // Trim whitespace
-                key.erase(0, key.find_first_not_of(" \t"));
-                key.erase(key.find_last_not_of(" \t") + 1);
-                value.erase(0, value.find_first_not_of(" \t"));
-                value.erase(value.find_last_not_of(" \t") + 1);
-
-                headers.emplace_back(Value::STRUCT({
-                    make_pair("key", Value(key)),
-                    make_pair("value", Value(value))
-                }));
-            }
-
-            last_pos = pos + 2;
-        }
-
-        result.SetValue(i, Value::LIST(LogicalType::STRUCT({
-            {"key", LogicalType::VARCHAR},
-            {"value", LogicalType::VARCHAR}
-        }), headers));
+    if (!payload_data.validity.RowIsValid(payload_idx)) {
+      result.SetValue(i, Value());
+      continue;
     }
+
+    const string_t &payload_str = payloads[payload_idx];
+    string payload(payload_str.GetDataUnsafe(), payload_str.GetSize());
+
+    if (!starts_with_http_verb(payload)) {
+      result.SetValue(i, Value());
+      continue;
+    }
+
+    vector<Value> headers;
+    size_t pos = payload.find("\r\n");
+    size_t last_pos = pos + 2;
+
+    while (pos != string::npos && last_pos < payload.length()) {
+      pos = payload.find("\r\n", last_pos);
+      if (pos == string::npos)
+        break;
+
+      string header_line = payload.substr(last_pos, pos - last_pos);
+      size_t colon_pos = header_line.find(':');
+
+      if (colon_pos != string::npos) {
+        string key = header_line.substr(0, colon_pos);
+        string value = header_line.substr(colon_pos + 1);
+
+        // Trim whitespace
+        key.erase(0, key.find_first_not_of(" \t"));
+        key.erase(key.find_last_not_of(" \t") + 1);
+        value.erase(0, value.find_first_not_of(" \t"));
+        value.erase(value.find_last_not_of(" \t") + 1);
+
+        headers.emplace_back(Value::STRUCT(
+            {make_pair("key", Value(key)), make_pair("value", Value(value))}));
+      }
+
+      last_pos = pos + 2;
+    }
+
+    result.SetValue(
+        i, Value::LIST(LogicalType::STRUCT({{"key", LogicalType::VARCHAR},
+                                            {"value", LogicalType::VARCHAR}}),
+                       headers));
+  }
 }
 
 bool is_http(const uint8_t *payload, size_t payload_length) {
@@ -229,6 +231,7 @@ TransportLayerInfo determineTransportLayer(const struct ip *ip_header,
   TransportLayerInfo info;
   info.source_port = 0;
   info.dest_port = 0;
+  info.tcp_seq_num = 0;
 
   switch (ip_header->ip_p) {
   case IPPROTO_TCP: {
@@ -241,8 +244,9 @@ TransportLayerInfo determineTransportLayer(const struct ip *ip_header,
     info.payload = packet + sizeof(struct ether_header) +
                    (ip_header->ip_hl << 2) + (tcp_header->th_off << 2);
     info.payload_length = header->len - (info.payload - packet);
+    info.tcp_seq_num = ntohl(tcp_header->th_seq); // Extract the sequence number
 
-    // Add TCP flags
+    // Add TCP flags (as before)
     if (tcp_header->th_flags & TH_SYN)
       info.tcp_flags.push_back("SYN");
     if (tcp_header->th_flags & TH_ACK)
@@ -305,6 +309,7 @@ static void PCAPReaderFunction(ClientContext &context,
   Vector &protocols_vector = output.data[9];
   Vector &payload_vector = output.data[10];
   Vector &tcp_flags_vector = output.data[11];
+  Vector &tcp_seq_num_vector = output.data[12];
 
   idx_t index = 0;
   while (index < STANDARD_VECTOR_SIZE) {
@@ -386,6 +391,13 @@ static void PCAPReaderFunction(ClientContext &context,
       tcp_flags_vector.SetValue(index, Value()); // NULL for non-TCP packets
     }
 
+    // Set TCP sequence number
+    if (tl_info.protocols.back() == "TCP") {
+      tcp_seq_num_vector.SetValue(index, Value::UINTEGER(tl_info.tcp_seq_num));
+    } else {
+      tcp_seq_num_vector.SetValue(index, Value()); // NULL for non-TCP packets
+    }
+
     // Create a DuckDB list value from the protocols vector
     vector<Value> protocol_values;
     for (const auto &protocol : protocols) {
@@ -435,11 +447,12 @@ PCAPReaderBind(ClientContext &context, TableFunctionBindInput &input,
       LogicalType::INTEGER,   LogicalType::INTEGER,
       LogicalType::VARCHAR,   LogicalType::VARCHAR,
       LogicalType::VARCHAR,   LogicalType::LIST(LogicalType::VARCHAR),
-      LogicalType::BLOB,      LogicalType::LIST(LogicalType::VARCHAR)};
+      LogicalType::BLOB,      LogicalType::LIST(LogicalType::VARCHAR),
+      LogicalType::UINTEGER};
 
-  names = {"timestamp", "source_ip", "dest_ip",     "source_port",
-           "dest_port", "length",    "tcp_session", "source_mac",
-           "dest_mac",  "protocols", "payload",     "tcp_flags"};
+  names = {"timestamp", "source_ip",   "dest_ip",    "source_port", "dest_port",
+           "length",    "tcp_session", "source_mac", "dest_mac",    "protocols",
+           "payload",   "tcp_flags",   "tcp_seq_num"};
 
   return result;
 }

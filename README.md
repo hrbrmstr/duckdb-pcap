@@ -4,7 +4,54 @@ This repository is based on https://github.com/duckdb/extension-template, check 
 
 ---
 
-This extension, Ppcap, allow you to ... <extension_goal>.
+This extension, Ppcap, allow you to read pcap files (well _one_ file for now).
+
+I need to figure out how to have it be just `pcap` but enough symbols collide with `libpcap` that it may take me a bit to figure that out.
+
+So far, this is what you get:
+
+```bash
+(
+./build/release/duckdb --json <<EOF
+FROM
+  read_pcap('scans.pcap')
+WHERE
+  is_http(payload)
+LIMIT 1
+EOF
+) | jq
+[
+  {
+    "timestamp": "2024-07-23 16:31:06",
+    "source_ip": "94.156.71.207",
+    "dest_ip": "203.161.44.208",
+    "source_port": 49678,
+    "dest_port": 80,
+    "length": 220,
+    "tcp_session": "94.156.71.207:49678-203.161.44.208:80",
+    "source_mac": "64:64:9b:4f:37:00",
+    "dest_mac": "00:16:3c:cb:72:42",
+    "protocols": "[Ethernet, IP, TCP]",
+    "payload": "GET /_profiler/phpinfo HTTP/1.1\\x0D\\x0AHost: 203.161.44.208\\x0D\\x0AUser-Agent: Web Downloader/6.9\\x0D\\x0AAccept-Charset: utf-8\\x0D\\x0AAccept-Encoding: gzip\\x0D\\x0AConnection: close\\x0D\\x0A\\x0D\\x0A"
+  }
+]
+```
+
+There's a single function exposed:
+
+- `it_http(payload)` will apply very naive heuristics on the payload and return `true` if it thinks the payload is an HTTP request or response. that will work on any `BLOB` field in DuckDB.
+
+Lots more to do!
+
+And, you have to do the following to use it until I figure out the "make a standalone INSTALLable and LOADable extension.
+
+I made this on macOS and I think you'll need to do some things to get this to work on Linux.
+
+As usual I don't care abt Windows users. Make better life choices.
+
+PRs welcome to get this working on the other operating systems. Not sure if this will ever be WASMable, but _I think_ it might be (ref: https://github.com/emscripten-core/emscripten/issues/16503).
+
+`scans.pcap` is from https://www.malware-traffic-analysis.net/2024/08/08/index.html
 
 
 ## Building

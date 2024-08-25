@@ -18,6 +18,8 @@
 #include <netinet/udp.h>
 #include <arpa/inet.h>
 
+#include <algorithm>
+#include <cctype>
 #include <sstream>
 #include <iomanip>
 
@@ -35,6 +37,54 @@ struct PCAPData : public TableFunctionData {
     }
   }
 };
+
+bool is_http(const uint8_t* payload, size_t payload_length) {
+    // If payload is too short, it's probably not HTTP
+    if (payload_length < 16) {
+        return false;
+    }
+
+    // Convert the start of the payload to a string for easier parsing
+    std::string start(reinterpret_cast<const char*>(payload), std::min(payload_length, size_t(16)));
+    std::transform(start.begin(), start.end(), start.begin(),
+                   [](unsigned char c){ return std::tolower(c); });
+
+    // Check for HTTP methods
+    static const char* http_methods[] = {
+        "get ", "post ", "head ", "put ", "delete ", "trace ", "options ", "connect ", "patch "
+    };
+    for (const auto& method : http_methods) {
+        if (start.compare(0, strlen(method), method) == 0) {
+            return true;
+        }
+    }
+
+    // Check for HTTP responses
+    if (start.compare(0, 5, "http/") == 0) {
+        return true;
+    }
+
+    return false;
+}
+
+static void IsHTTPFunction(DataChunk &args, ExpressionState &state, Vector &result) {
+    auto &payload_vector = args.data[0];
+
+    auto payload_data = FlatVector::GetData<string_t>(payload_vector);
+    auto result_data = FlatVector::GetData<bool>(result);
+
+    auto &payload_validity = FlatVector::Validity(payload_vector);
+    auto &result_validity = FlatVector::Validity(result);
+
+    for (idx_t i = 0; i < args.size(); i++) {
+        if (!payload_validity.RowIsValid(i)) {
+            result_validity.SetInvalid(i);
+            continue;
+        }
+
+        result_data[i] = is_http(reinterpret_cast<const uint8_t*>(payload_data[i].GetDataUnsafe()), payload_data[i].GetSize());
+    }
+}
 
 static string mac_to_string(const unsigned char* mac) {
     std::stringstream ss;
@@ -189,6 +239,9 @@ static unique_ptr<FunctionData> PCAPReaderBind(ClientContext &context, TableFunc
 static void LoadInternal(DatabaseInstance &instance) {
   TableFunction pcap_reader("read_pcap", {LogicalType::VARCHAR}, PCAPReaderFunction, PCAPReaderBind);
   ExtensionUtil::RegisterFunction(instance, pcap_reader);
+  ScalarFunction is_http_func("is_http", {LogicalType::BLOB},
+                              LogicalType::BOOLEAN, IsHTTPFunction);
+  ExtensionUtil::RegisterFunction(instance, is_http_func);
 }
 
 void PpcapExtension::Load(DuckDB &db) {

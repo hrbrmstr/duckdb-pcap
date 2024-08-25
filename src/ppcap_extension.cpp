@@ -20,6 +20,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <cstdint>
 #include <iomanip>
 #include <sstream>
 #include <vector>
@@ -50,6 +51,31 @@ struct TransportLayerInfo {
   vector<string> tcp_flags;
   uint32_t tcp_seq_num;
 };
+
+struct ICMPInfo {
+  uint8_t type;
+  uint8_t code;
+  std::string type_name;
+  std::string additional_info;
+  std::string message;
+};
+
+// ICMP type definitions
+#define ICMP_ECHOREPLY 0
+#define ICMP_DEST_UNREACH 3
+#define ICMP_SOURCE_QUENCH 4
+#define ICMP_REDIRECT 5
+#define ICMP_ECHO 8
+#define ICMP_TIME_EXCEEDED 11
+
+static std::string bytes_to_hex(const uint8_t* data, size_t len) {
+    std::stringstream ss;
+    ss << std::hex << std::setfill('0');
+    for (size_t i = 0; i < len; ++i) {
+        ss << std::setw(2) << static_cast<int>(data[i]);
+    }
+    return ss.str();
+}
 
 bool starts_with_http_verb(const string &payload) {
   static const vector<string> http_verbs = {"GET ",     "POST ",    "HEAD ",
@@ -289,6 +315,118 @@ TransportLayerInfo determineTransportLayer(const struct ip *ip_header,
   return info;
 }
 
+static ICMPInfo extract_icmp_info(const uint8_t* icmp_packet, size_t packet_len) {
+    if (packet_len < 8) {  // Minimum ICMP header size
+        return {0, 0, "Invalid", "Packet too short", ""};
+    }
+
+    ICMPInfo info;
+    info.type = icmp_packet[0];
+    info.code = icmp_packet[1];
+
+    auto get_uint16 = [](const uint8_t* data) {
+        return (uint16_t)((data[0] << 8) | data[1]);
+    };
+
+    switch (info.type) {
+        case ICMP_ECHOREPLY:
+            info.type_name = "Echo Reply";
+            info.additional_info = "ID: " + std::to_string(get_uint16(icmp_packet + 4)) +
+                                   ", Sequence: " + std::to_string(get_uint16(icmp_packet + 6));
+            if (packet_len > 8) {
+                size_t message_len = std::min(packet_len - 8, (size_t)32);  // Limit to 32 bytes
+                info.message = bytes_to_hex(icmp_packet + 8, message_len);
+            }
+            break;
+        case ICMP_DEST_UNREACH:
+            info.type_name = "Destination Unreachable";
+            switch (info.code) {
+                case 0: info.additional_info = "Network Unreachable"; break;
+                case 1: info.additional_info = "Host Unreachable"; break;
+                case 2: info.additional_info = "Protocol Unreachable"; break;
+                case 3: info.additional_info = "Port Unreachable"; break;
+                default: info.additional_info = "Code: " + std::to_string(info.code);
+            }
+            break;
+        case ICMP_SOURCE_QUENCH:
+            info.type_name = "Source Quench";
+            info.additional_info = "Request to slow down";
+            break;
+        case ICMP_REDIRECT:
+            info.type_name = "Redirect";
+            if (packet_len >= 12) {
+                char ip_str[INET_ADDRSTRLEN];
+                inet_ntop(AF_INET, icmp_packet + 4, ip_str, INET_ADDRSTRLEN);
+                info.additional_info = "Redirect to: " + std::string(ip_str);
+            } else {
+                info.additional_info = "Incomplete redirect information";
+            }
+            break;
+        case ICMP_ECHO:
+            info.type_name = "Echo Request";
+            info.additional_info = "ID: " + std::to_string(get_uint16(icmp_packet + 4)) +
+                                   ", Sequence: " + std::to_string(get_uint16(icmp_packet + 6));
+            if (packet_len > 8) {
+                size_t message_len = std::min(packet_len - 8, (size_t)32);  // Limit to 32 bytes
+                info.message = bytes_to_hex(icmp_packet + 8, message_len);
+            }
+            break;
+        case ICMP_TIME_EXCEEDED:
+            info.type_name = "Time Exceeded";
+            info.additional_info = (info.code == 0) ? "TTL exceeded" : "Fragment reassembly time exceeded";
+            break;
+        default:
+            info.type_name = "Other";
+            info.additional_info = "Type: " + std::to_string(info.type) + ", Code: " + std::to_string(info.code);
+    }
+
+    return info;
+}
+
+static void ExtractICMPTypeFunction(DataChunk &args, ExpressionState &state, Vector &result) {
+    auto &payload_vector = args.data[0];
+
+    UnifiedVectorFormat payload_data;
+    payload_vector.ToUnifiedFormat(args.size(), payload_data);
+
+    auto payloads = (string_t*)payload_data.data;
+
+    // Prepare the struct type for the result
+    child_list_t<LogicalType> struct_children = {
+        {"type", LogicalType::UTINYINT},
+        {"code", LogicalType::UTINYINT},
+        {"type_name", LogicalType::VARCHAR},
+        {"additional_info", LogicalType::VARCHAR},
+        {"message", LogicalType::VARCHAR}
+    };
+    auto struct_type = LogicalType::STRUCT(struct_children);
+
+    for (idx_t i = 0; i < args.size(); i++) {
+        idx_t payload_idx = payload_data.sel->get_index(i);
+
+        if (!payload_data.validity.RowIsValid(payload_idx)) {
+            result.SetValue(i, Value());
+            continue;
+        }
+
+        const string_t &payload_str = payloads[payload_idx];
+        const uint8_t* payload = reinterpret_cast<const uint8_t*>(payload_str.GetDataUnsafe());
+        size_t payload_len = payload_str.GetSize();
+
+        ICMPInfo icmp_info = extract_icmp_info(payload, payload_len);
+
+        // Create a struct value with the ICMP information
+        child_list_t<Value> struct_values;
+        struct_values.push_back(make_pair("type", Value::UTINYINT(icmp_info.type)));
+        struct_values.push_back(make_pair("code", Value::UTINYINT(icmp_info.code)));
+        struct_values.push_back(make_pair("type_name", Value(icmp_info.type_name)));
+        struct_values.push_back(make_pair("additional_info", Value(icmp_info.additional_info)));
+        struct_values.push_back(make_pair("message", Value(icmp_info.message)));
+
+        result.SetValue(i, Value::STRUCT(struct_values));
+    }
+}
+
 static void PCAPReaderFunction(ClientContext &context,
                                TableFunctionInput &data_p, DataChunk &output) {
   auto &pcap_data = (PCAPData &)*data_p.bind_data;
@@ -458,7 +596,6 @@ PCAPReaderBind(ClientContext &context, TableFunctionBindInput &input,
 }
 
 static void LoadInternal(DatabaseInstance &instance) {
-
   TableFunction pcap_reader("read_pcap", {LogicalType::ANY}, PCAPReaderFunction,
                             PCAPReaderBind);
   ExtensionUtil::RegisterFunction(instance, pcap_reader);
@@ -473,6 +610,16 @@ static void LoadInternal(DatabaseInstance &instance) {
           {{"key", LogicalType::VARCHAR}, {"value", LogicalType::VARCHAR}})),
       ExtractHTTPRequestHeadersFunction);
   ExtensionUtil::RegisterFunction(instance, extract_http_headers_func);
+
+  ScalarFunction extract_icmp_type_func(
+      "extract_icmp_type", {LogicalType::BLOB},
+      LogicalType::STRUCT({{"type", LogicalType::UTINYINT},
+                           {"code", LogicalType::UTINYINT},
+                           {"type_name", LogicalType::VARCHAR},
+                           {"additional_info", LogicalType::VARCHAR},
+                           {"message", LogicalType::VARCHAR}}),
+      ExtractICMPTypeFunction);
+  ExtensionUtil::RegisterFunction(instance, extract_icmp_type_func);
 }
 
 void PpcapExtension::Load(DuckDB &db) { LoadInternal(*db.instance); }

@@ -68,6 +68,7 @@ There's a single function exposed:
 
 - `is_http(payload)` will apply very naive heuristics on the payload and return `true` if it thinks the payload is an HTTP request or response. that will work on any `BLOB` field in DuckDB.
 - `extract_http_request_headers(payload)` will do what it says on the tin provided ^^
+- `extract_icmp_type`
 
 Lots more to do!
 

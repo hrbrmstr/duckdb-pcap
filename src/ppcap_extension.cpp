@@ -11,6 +11,8 @@
 // OpenSSL linked through vcpkg
 #include <openssl/opensslv.h>
 
+#include <glob.h>
+
 #include <arpa/inet.h>
 #include <netinet/if_ether.h>
 #include <netinet/ip.h>
@@ -22,14 +24,16 @@
 #include <cctype>
 #include <iomanip>
 #include <sstream>
+#include <vector>
 
 namespace duckdb {
 
 struct PCAPData : public TableFunctionData {
+  vector<string> filenames;
+  size_t current_file_index;
   pcap_t *handle;
-  string filename;
 
-  PCAPData(string filename) : filename(filename), handle(nullptr) {}
+  PCAPData() : current_file_index(0), handle(nullptr) {}
 
   ~PCAPData() {
     if (handle) {
@@ -132,10 +136,30 @@ static void PCAPReaderFunction(ClientContext &context,
 
   idx_t index = 0;
   while (index < STANDARD_VECTOR_SIZE) {
-    result = pcap_next_ex(pcap_data.handle, &header, &packet);
+    if (!pcap_data.handle) {
+      // If we don't have an open file, try to open the next one
+      if (pcap_data.current_file_index >= pcap_data.filenames.size()) {
+        // No more files to process
+        break;
+      }
+      char errbuf[PCAP_ERRBUF_SIZE];
+      pcap_data.handle = pcap_open_offline(
+          pcap_data.filenames[pcap_data.current_file_index].c_str(), errbuf);
+      if (pcap_data.handle == nullptr) {
+        throw std::runtime_error("Failed to open PCAP file: " + string(errbuf));
+      }
+      pcap_data.current_file_index++;
+    }
+
+    struct pcap_pkthdr *header;
+    const u_char *packet;
+    int result = pcap_next_ex(pcap_data.handle, &header, &packet);
+
     if (result == -2) {
-      // End of file
-      break;
+      // End of file, close current file and move to next
+      pcap_close(pcap_data.handle);
+      pcap_data.handle = nullptr;
+      continue;
     } else if (result == -1) {
       throw std::runtime_error(pcap_geterr(pcap_data.handle));
     } else if (result == 0) {
@@ -231,6 +255,32 @@ static void PCAPReaderFunction(ClientContext &context,
 static unique_ptr<FunctionData>
 PCAPReaderBind(ClientContext &context, TableFunctionBindInput &input,
                vector<LogicalType> &return_types, vector<string> &names) {
+  auto result = make_uniq<PCAPData>();
+
+  if (input.inputs[0].type().id() == LogicalTypeId::VARCHAR) {
+    // Single input: could be a filename or a wildcard
+    string file_pattern = input.inputs[0].GetValue<string>();
+    glob_t glob_result;
+    glob(file_pattern.c_str(), GLOB_TILDE, NULL, &glob_result);
+    for (unsigned int i = 0; i < glob_result.gl_pathc; ++i) {
+      result->filenames.push_back(string(glob_result.gl_pathv[i]));
+    }
+    globfree(&glob_result);
+  } else if (input.inputs[0].type().id() == LogicalTypeId::LIST) {
+    // List input: multiple filenames
+    auto file_list = ListValue::GetChildren(input.inputs[0]);
+    for (const auto &file : file_list) {
+      result->filenames.push_back(file.GetValue<string>());
+    }
+  } else {
+    throw InvalidInputException("Input must be either a string (filename or "
+                                "wildcard) or a list of strings (filenames)");
+  }
+
+  if (result->filenames.empty()) {
+    throw InvalidInputException("No files found matching the input pattern");
+  }
+
   return_types = {
       LogicalType::TIMESTAMP, LogicalType::VARCHAR,
       LogicalType::VARCHAR,   LogicalType::INTEGER,
@@ -242,19 +292,11 @@ PCAPReaderBind(ClientContext &context, TableFunctionBindInput &input,
            "dest_port", "length",    "tcp_session", "source_mac",
            "dest_mac",  "protocols", "payload"};
 
-  auto result = make_uniq<PCAPData>(input.inputs[0].GetValue<string>());
-  char errbuf[PCAP_ERRBUF_SIZE];
-  result->handle = pcap_open_offline(result->filename.c_str(), errbuf);
-  if (result->handle == nullptr) {
-    throw std::runtime_error(errbuf);
-  }
-
   return result;
 }
 
 static void LoadInternal(DatabaseInstance &instance) {
-  TableFunction pcap_reader("read_pcap", {LogicalType::VARCHAR},
-                            PCAPReaderFunction, PCAPReaderBind);
+  TableFunction pcap_reader("read_pcap", {LogicalType::ANY}, PCAPReaderFunction, PCAPReaderBind);
   ExtensionUtil::RegisterFunction(instance, pcap_reader);
   ScalarFunction is_http_func("is_http", {LogicalType::BLOB},
                               LogicalType::BOOLEAN, IsHTTPFunction);

@@ -4,7 +4,7 @@ This repository is based on https://github.com/duckdb/extension-template, check 
 
 ---
 
-This extension, Ppcap, allow you to read pcap files (well _one_ file for now).
+This extension, `ppcap`, allow you to read pcap files.
 
 I need to figure out how to have it be just `pcap` but enough symbols collide with `libpcap` that it may take me a bit to figure that out.
 
@@ -14,7 +14,7 @@ So far, this is what you get:
 (
 ./build/release/duckdb --json <<EOF
 FROM
-  read_pcap('scans.pcap')
+  read_pcap('*.pcap')
 WHERE
   is_http(payload)
 LIMIT 1

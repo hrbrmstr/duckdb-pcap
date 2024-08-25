@@ -4,9 +4,16 @@ This repository is based on https://github.com/duckdb/extension-template, check 
 
 ---
 
-This extension, `ppcap`, allow you to read pcap files.
+This extension, `pcap`, allow you to read pcap files.
 
-I need to figure out how to have it be just `pcap` but enough symbols collide with `libpcap` that it may take me a bit to figure that out.
+Eventually I'll get extensions built, so all you have to do is:
+
+```sql
+INSTALL pcap;
+LOAD pcap;
+```
+
+For now, you gotta use it locally.
 
 So far, this is what you get:
 

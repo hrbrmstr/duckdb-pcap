@@ -302,7 +302,7 @@ static void LoadInternal(DatabaseInstance &instance) {
 }
 
 void PpcapExtension::Load(DuckDB &db) { LoadInternal(*db.instance); }
-std::string PpcapExtension::Name() { return "ppcap"; }
+std::string PpcapExtension::Name() { return "pcap"; }
 
 std::string PpcapExtension::Version() const {
 #ifdef EXT_VERSION_PPCAP

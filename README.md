@@ -20,49 +20,53 @@ So far, this is what you get:
 ```bash
 (./build/release/duckdb --json <<EOF
 FROM
-  read_pcap('*.pcap')
+ read_pcap('*.pcap')
 SELECT
-  *
-WHERE
-  is_http(payload)
+ *,
+ extract_http_request_headers(payload) as req
+WHERE is_http(payload)
 LIMIT 2
 EOF
 ) | jq
+
 [
-  {
-    "timestamp": "2024-07-23 16:31:06",
-    "source_ip": "94.156.71.207",
-    "dest_ip": "203.161.44.208",
-    "source_port": 49678,
-    "dest_port": 80,
-    "length": 154,
-    "tcp_session": "94.156.71.207:49678-203.161.44.208:80",
-    "source_mac": "64:64:9b:4f:37:00",
-    "dest_mac": "00:16:3c:cb:72:42",
-    "protocols": "[Ethernet, IP, TCP]",
-    "payload": "GET /_profiler/phpinfo HTTP/1.1\\x0D\\x0AHost: 203.161.44.208\\x0D\\x0AUser-Agent: Web Downloader/6.9\\x0D\\x0AAccept-Charset: utf-8\\x0D\\x0AAccept-Encoding: gzip\\x0D\\x0AConnection: close\\x0D\\x0A\\x0D\\x0A",
-    "tcp_flags": "[ACK, PSH]"
-  },
-  {
-    "timestamp": "2024-07-23 16:31:06",
-    "source_ip": "203.161.44.208",
-    "dest_ip": "94.156.71.207",
-    "source_port": 80,
-    "dest_port": 49678,
-    "length": 456,
-    "tcp_session": "203.161.44.208:80-94.156.71.207:49678",
-    "source_mac": "00:16:3c:cb:72:42",
-    "dest_mac": "64:64:9b:4f:37:00",
-    "protocols": "[Ethernet, IP, TCP]",
-    "payload": "HTTP/1.1 404 Not Found\\x0D\\x0ADate: Tue, 23 Jul 2024 16:31:06 GMT\\x0D\\x0AServer: Apache/2.4.52 (Ubuntu)\\x0D\\x0AContent-Length: 276\\x0D\\x0AConnection: close\\x0D\\x0AContent-Type: text/html; charset=iso-8859-1\\x0D\\x0A\\x0D\\x0A<!DOCTYPE HTML PUBLIC \\x22-//IETF//DTD HTML 2.0//EN\\x22>\\x0A<html><head>\\x0A<title>404 Not Found</title>\\x0A</head><body>\\x0A<h1>Not Found</h1>\\x0A<p>The requested URL was not found on this server.</p>\\x0A<hr>\\x0A<address>Apache/2.4.52 (Ubuntu) Server at 203.161.44.208 Port 80</address>\\x0A</body></html>\\x0A",
-    "tcp_flags": "[ACK, PSH]"
-  }
+ {
+   "timestamp": "2024-07-23 16:31:06",
+   "source_ip": "94.156.71.207",
+   "dest_ip": "203.161.44.208",
+   "source_port": 49678,
+   "dest_port": 80,
+   "length": 154,
+   "tcp_session": "94.156.71.207:49678-203.161.44.208:80",
+   "source_mac": "64:64:9b:4f:37:00",
+   "dest_mac": "00:16:3c:cb:72:42",
+   "protocols": "[Ethernet, IP, TCP]",
+   "payload": "GET /_profiler/phpinfo HTTP/1.1\\x0D\\x0AHost: 203.161.44.208\\x0D\\x0AUser-Agent: Web Downloader/6.9\\x0D\\x0AAccept-Charset: utf-8\\x0D\\x0AAccept-Encoding: gzip\\x0D\\x0AConnection: close\\x0D\\x0A\\x0D\\x0A",
+   "tcp_flags": "[ACK, PSH]",
+   "req": "[{'key': Host, 'value': 203.161.44.208}, {'key': User-Agent, 'value': Web Downloader/6.9}, {'key': Accept-Charset, 'value': utf-8}, {'key': Accept-Encoding, 'value': gzip}, {'key': Connection, 'value': close}]"
+ },
+ {
+   "timestamp": "2024-07-23 16:31:06",
+   "source_ip": "203.161.44.208",
+   "dest_ip": "94.156.71.207",
+   "source_port": 80,
+   "dest_port": 49678,
+   "length": 456,
+   "tcp_session": "203.161.44.208:80-94.156.71.207:49678",
+   "source_mac": "00:16:3c:cb:72:42",
+   "dest_mac": "64:64:9b:4f:37:00",
+   "protocols": "[Ethernet, IP, TCP]",
+   "payload": "HTTP/1.1 404 Not Found\\x0D\\x0ADate: Tue, 23 Jul 2024 16:31:06 GMT\\x0D\\x0AServer: Apache/2.4.52 (Ubuntu)\\x0D\\x0AContent-Length: 276\\x0D\\x0AConnection: close\\x0D\\x0AContent-Type: text/html; charset=iso-8859-1\\x0D\\x0A\\x0D\\x0A<!DOCTYPE HTML PUBLIC \\x22-//IETF//DTD HTML 2.0//EN\\x22>\\x0A<html><head>\\x0A<title>404 Not Found</title>\\x0A</head><body>\\x0A<h1>Not Found</h1>\\x0A<p>The requested URL was not found on this server.</p>\\x0A<hr>\\x0A<address>Apache/2.4.52 (Ubuntu) Server at 203.161.44.208 Port 80</address>\\x0A</body></html>\\x0A",
+   "tcp_flags": "[ACK, PSH]",
+   "req": null
+ }
 ]
 ```
 
 There's a single function exposed:
 
-- `it_http(payload)` will apply very naive heuristics on the payload and return `true` if it thinks the payload is an HTTP request or response. that will work on any `BLOB` field in DuckDB.
+- `is_http(payload)` will apply very naive heuristics on the payload and return `true` if it thinks the payload is an HTTP request or response. that will work on any `BLOB` field in DuckDB.
+- `extract_http_request_headers(payload)` will do what it says on the tin provided ^^
 
 Lots more to do!
 

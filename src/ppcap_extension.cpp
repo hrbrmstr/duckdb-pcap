@@ -50,6 +50,79 @@ struct TransportLayerInfo {
   vector<string> tcp_flags;
 };
 
+bool starts_with_http_verb(const string &payload) {
+  static const vector<string> http_verbs = {"GET ",     "POST ",    "HEAD ",
+                                            "PUT ",     "DELETE ",  "TRACE ",
+                                            "OPTIONS ", "CONNECT ", "PATCH "};
+  for (const auto &verb : http_verbs) {
+    if (payload.compare(0, verb.length(), verb) == 0) {
+      return true;
+    }
+  }
+  return false;
+}
+
+static void ExtractHTTPRequestHeadersFunction(DataChunk &args, ExpressionState &state, Vector &result) {
+    auto &payload_vector = args.data[0];
+
+    UnifiedVectorFormat payload_data;
+    payload_vector.ToUnifiedFormat(args.size(), payload_data);
+
+    auto payloads = (string_t*)payload_data.data;
+
+    for (idx_t i = 0; i < args.size(); i++) {
+        idx_t payload_idx = payload_data.sel->get_index(i);
+
+        if (!payload_data.validity.RowIsValid(payload_idx)) {
+            result.SetValue(i, Value());
+            continue;
+        }
+
+        const string_t &payload_str = payloads[payload_idx];
+        string payload(payload_str.GetDataUnsafe(), payload_str.GetSize());
+
+        if (!starts_with_http_verb(payload)) {
+            result.SetValue(i, Value());
+            continue;
+        }
+
+        vector<Value> headers;
+        size_t pos = payload.find("\r\n");
+        size_t last_pos = pos + 2;
+
+        while (pos != string::npos && last_pos < payload.length()) {
+            pos = payload.find("\r\n", last_pos);
+            if (pos == string::npos) break;
+
+            string header_line = payload.substr(last_pos, pos - last_pos);
+            size_t colon_pos = header_line.find(':');
+
+            if (colon_pos != string::npos) {
+                string key = header_line.substr(0, colon_pos);
+                string value = header_line.substr(colon_pos + 1);
+
+                // Trim whitespace
+                key.erase(0, key.find_first_not_of(" \t"));
+                key.erase(key.find_last_not_of(" \t") + 1);
+                value.erase(0, value.find_first_not_of(" \t"));
+                value.erase(value.find_last_not_of(" \t") + 1);
+
+                headers.emplace_back(Value::STRUCT({
+                    make_pair("key", Value(key)),
+                    make_pair("value", Value(value))
+                }));
+            }
+
+            last_pos = pos + 2;
+        }
+
+        result.SetValue(i, Value::LIST(LogicalType::STRUCT({
+            {"key", LogicalType::VARCHAR},
+            {"value", LogicalType::VARCHAR}
+        }), headers));
+    }
+}
+
 bool is_http(const uint8_t *payload, size_t payload_length) {
   // If payload is too short, it's probably not HTTP
   if (payload_length < 16) {
@@ -83,23 +156,51 @@ bool is_http(const uint8_t *payload, size_t payload_length) {
 static void IsHTTPFunction(DataChunk &args, ExpressionState &state,
                            Vector &result) {
   auto &payload_vector = args.data[0];
-
-  auto payload_data = FlatVector::GetData<string_t>(payload_vector);
   auto result_data = FlatVector::GetData<bool>(result);
 
-  auto &payload_validity = FlatVector::Validity(payload_vector);
-  auto &result_validity = FlatVector::Validity(result);
+  UnifiedVectorFormat payload_data;
+  payload_vector.ToUnifiedFormat(args.size(), payload_data);
+
+  auto payloads = (string_t *)payload_data.data;
 
   for (idx_t i = 0; i < args.size(); i++) {
-    if (!payload_validity.RowIsValid(i)) {
-      result_validity.SetInvalid(i);
+    idx_t payload_idx = payload_data.sel->get_index(i);
+
+    if (!payload_data.validity.RowIsValid(payload_idx)) {
+      result_data[i] = false;
       continue;
     }
 
-    result_data[i] = is_http(
-        reinterpret_cast<const uint8_t *>(payload_data[i].GetDataUnsafe()),
-        payload_data[i].GetSize());
+    const string_t &payload = payloads[payload_idx];
+
+    if (payload.GetSize() < 16) {
+      result_data[i] = false;
+      continue;
+    }
+
+    std::string start(reinterpret_cast<const char *>(payload.GetDataUnsafe()),
+                      std::min(payload.GetSize(), (idx_t)16));
+    std::transform(start.begin(), start.end(), start.begin(),
+                   [](unsigned char c) { return std::tolower(c); });
+
+    static const char *http_methods[] = {"get ",     "post ",    "head ",
+                                         "put ",     "delete ",  "trace ",
+                                         "options ", "connect ", "patch "};
+
+    result_data[i] = false;
+    for (const auto &method : http_methods) {
+      if (start.compare(0, strlen(method), method) == 0) {
+        result_data[i] = true;
+        break;
+      }
+    }
+
+    if (!result_data[i] && start.compare(0, 5, "http/") == 0) {
+      result_data[i] = true;
+    }
   }
+
+  result.SetVectorType(VectorType::FLAT_VECTOR);
 }
 
 static string mac_to_string(const unsigned char *mac) {
@@ -279,10 +380,10 @@ static void PCAPReaderFunction(ClientContext &context,
       for (const auto &flag : tl_info.tcp_flags) {
         flag_values.push_back(Value(flag));
       }
-      tcp_flags_vector.SetValue(
-          index, Value::LIST(LogicalType::VARCHAR, flag_values));
+      tcp_flags_vector.SetValue(index,
+                                Value::LIST(LogicalType::VARCHAR, flag_values));
     } else {
-      tcp_flags_vector.SetValue(index, Value());  // NULL for non-TCP packets
+      tcp_flags_vector.SetValue(index, Value()); // NULL for non-TCP packets
     }
 
     // Create a DuckDB list value from the protocols vector
@@ -344,12 +445,21 @@ PCAPReaderBind(ClientContext &context, TableFunctionBindInput &input,
 }
 
 static void LoadInternal(DatabaseInstance &instance) {
+
   TableFunction pcap_reader("read_pcap", {LogicalType::ANY}, PCAPReaderFunction,
                             PCAPReaderBind);
   ExtensionUtil::RegisterFunction(instance, pcap_reader);
+
   ScalarFunction is_http_func("is_http", {LogicalType::BLOB},
                               LogicalType::BOOLEAN, IsHTTPFunction);
   ExtensionUtil::RegisterFunction(instance, is_http_func);
+
+  ScalarFunction extract_http_headers_func(
+      "extract_http_request_headers", {LogicalType::BLOB},
+      LogicalType::LIST(LogicalType::STRUCT(
+          {{"key", LogicalType::VARCHAR}, {"value", LogicalType::VARCHAR}})),
+      ExtractHTTPRequestHeadersFunction);
+  ExtensionUtil::RegisterFunction(instance, extract_http_headers_func);
 }
 
 void PpcapExtension::Load(DuckDB &db) { LoadInternal(*db.instance); }

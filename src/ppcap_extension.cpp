@@ -47,6 +47,7 @@ struct TransportLayerInfo {
   string tcp_session;
   const u_char *payload;
   size_t payload_length;
+  vector<string> tcp_flags;
 };
 
 bool is_http(const uint8_t *payload, size_t payload_length) {
@@ -139,6 +140,21 @@ TransportLayerInfo determineTransportLayer(const struct ip *ip_header,
     info.payload = packet + sizeof(struct ether_header) +
                    (ip_header->ip_hl << 2) + (tcp_header->th_off << 2);
     info.payload_length = header->len - (info.payload - packet);
+
+    // Add TCP flags
+    if (tcp_header->th_flags & TH_SYN)
+      info.tcp_flags.push_back("SYN");
+    if (tcp_header->th_flags & TH_ACK)
+      info.tcp_flags.push_back("ACK");
+    if (tcp_header->th_flags & TH_RST)
+      info.tcp_flags.push_back("RST");
+    if (tcp_header->th_flags & TH_FIN)
+      info.tcp_flags.push_back("FIN");
+    if (tcp_header->th_flags & TH_PUSH)
+      info.tcp_flags.push_back("PSH");
+    if (tcp_header->th_flags & TH_URG)
+      info.tcp_flags.push_back("URG");
+
     break;
   }
   case IPPROTO_UDP: {
@@ -187,6 +203,7 @@ static void PCAPReaderFunction(ClientContext &context,
   Vector &dest_mac_vector = output.data[8];
   Vector &protocols_vector = output.data[9];
   Vector &payload_vector = output.data[10];
+  Vector &tcp_flags_vector = output.data[11];
 
   idx_t index = 0;
   while (index < STANDARD_VECTOR_SIZE) {
@@ -256,6 +273,18 @@ static void PCAPReaderFunction(ClientContext &context,
     payload_vector.SetValue(
         index, Value::BLOB(tl_info.payload, tl_info.payload_length));
 
+    // Set TCP flags
+    if (!tl_info.tcp_flags.empty()) {
+      vector<Value> flag_values;
+      for (const auto &flag : tl_info.tcp_flags) {
+        flag_values.push_back(Value(flag));
+      }
+      tcp_flags_vector.SetValue(
+          index, Value::LIST(LogicalType::VARCHAR, flag_values));
+    } else {
+      tcp_flags_vector.SetValue(index, Value());  // NULL for non-TCP packets
+    }
+
     // Create a DuckDB list value from the protocols vector
     vector<Value> protocol_values;
     for (const auto &protocol : protocols) {
@@ -305,10 +334,11 @@ PCAPReaderBind(ClientContext &context, TableFunctionBindInput &input,
       LogicalType::INTEGER,   LogicalType::INTEGER,
       LogicalType::VARCHAR,   LogicalType::VARCHAR,
       LogicalType::VARCHAR,   LogicalType::LIST(LogicalType::VARCHAR),
-      LogicalType::BLOB};
+      LogicalType::BLOB,      LogicalType::LIST(LogicalType::VARCHAR)};
+
   names = {"timestamp", "source_ip", "dest_ip",     "source_port",
            "dest_port", "length",    "tcp_session", "source_mac",
-           "dest_mac",  "protocols", "payload"};
+           "dest_mac",  "protocols", "payload",     "tcp_flags"};
 
   return result;
 }

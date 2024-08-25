@@ -40,6 +40,15 @@ struct PCAPData : public TableFunctionData {
   }
 };
 
+struct TransportLayerInfo {
+  vector<string> protocols;
+  int source_port;
+  int dest_port;
+  string tcp_session;
+  const u_char *payload;
+  size_t payload_length;
+};
+
 bool is_http(const uint8_t *payload, size_t payload_length) {
   // If payload is too short, it's probably not HTTP
   if (payload_length < 16) {
@@ -112,6 +121,53 @@ static string generate_tcp_session(const struct ip *ip_header,
   return ss.str();
 }
 
+TransportLayerInfo determineTransportLayer(const struct ip *ip_header,
+                                           const u_char *packet,
+                                           const struct pcap_pkthdr *header) {
+  TransportLayerInfo info;
+  info.source_port = 0;
+  info.dest_port = 0;
+
+  switch (ip_header->ip_p) {
+  case IPPROTO_TCP: {
+    info.protocols.push_back("TCP");
+    struct tcphdr *tcp_header =
+        (struct tcphdr *)((char *)ip_header + (ip_header->ip_hl << 2));
+    info.source_port = ntohs(tcp_header->th_sport);
+    info.dest_port = ntohs(tcp_header->th_dport);
+    info.tcp_session = generate_tcp_session(ip_header, tcp_header);
+    info.payload = packet + sizeof(struct ether_header) +
+                   (ip_header->ip_hl << 2) + (tcp_header->th_off << 2);
+    info.payload_length = header->len - (info.payload - packet);
+    break;
+  }
+  case IPPROTO_UDP: {
+    info.protocols.push_back("UDP");
+    struct udphdr *udp_header =
+        (struct udphdr *)((char *)ip_header + (ip_header->ip_hl << 2));
+    info.source_port = ntohs(udp_header->uh_sport);
+    info.dest_port = ntohs(udp_header->uh_dport);
+    info.payload = packet + sizeof(struct ether_header) +
+                   (ip_header->ip_hl << 2) + sizeof(struct udphdr);
+    info.payload_length = header->len - (info.payload - packet);
+    break;
+  }
+  case IPPROTO_ICMP:
+    info.protocols.push_back("ICMP");
+    info.payload =
+        packet + sizeof(struct ether_header) + (ip_header->ip_hl << 2);
+    info.payload_length = header->len - (info.payload - packet);
+    break;
+  default:
+    info.protocols.push_back("Unknown");
+    info.payload =
+        packet + sizeof(struct ether_header) + (ip_header->ip_hl << 2);
+    info.payload_length = header->len - (info.payload - packet);
+  }
+
+  return info;
+}
+
 static void PCAPReaderFunction(ClientContext &context,
                                TableFunctionInput &data_p, DataChunk &output) {
   auto &pcap_data = (PCAPData &)*data_p.bind_data;
@@ -182,59 +238,23 @@ static void PCAPReaderFunction(ClientContext &context,
     struct ip *ip_header = (struct ip *)(packet + sizeof(struct ether_header));
     protocols.push_back("IP");
 
+    TransportLayerInfo tl_info =
+        determineTransportLayer(ip_header, packet, header);
+    protocols.insert(protocols.end(), tl_info.protocols.begin(),
+                     tl_info.protocols.end());
+
     source_ip_vector.SetValue(index, Value(inet_ntoa(ip_header->ip_src)));
     dest_ip_vector.SetValue(index, Value(inet_ntoa(ip_header->ip_dst)));
-    length_vector.SetValue(index, Value::INTEGER(header->len));
-
-    int source_port = 0;
-    int dest_port = 0;
-    string tcp_session;
-    const u_char *payload;
-    size_t payload_length;
-
-    // Determine the transport layer protocol
-    switch (ip_header->ip_p) {
-    case IPPROTO_TCP: {
-      protocols.push_back("TCP");
-      struct tcphdr *tcp_header =
-          (struct tcphdr *)((char *)ip_header + (ip_header->ip_hl << 2));
-      source_port = ntohs(tcp_header->th_sport);
-      dest_port = ntohs(tcp_header->th_dport);
-      tcp_session = generate_tcp_session(ip_header, tcp_header);
-      payload = packet + sizeof(struct ether_header) + (ip_header->ip_hl << 2) +
-                (tcp_header->th_off << 2);
-      payload_length = header->len - (payload - packet);
-      break;
-    }
-    case IPPROTO_UDP: {
-      protocols.push_back("UDP");
-      struct udphdr *udp_header =
-          (struct udphdr *)((char *)ip_header + (ip_header->ip_hl << 2));
-      source_port = ntohs(udp_header->uh_sport);
-      dest_port = ntohs(udp_header->uh_dport);
-      payload = packet + sizeof(struct ether_header) + (ip_header->ip_hl << 2) +
-                sizeof(struct udphdr);
-      payload_length = header->len - (payload - packet);
-      break;
-    }
-    case IPPROTO_ICMP:
-      protocols.push_back("ICMP");
-      payload = packet + sizeof(struct ether_header) + (ip_header->ip_hl << 2);
-      payload_length = header->len - (payload - packet);
-      break;
-    default:
-      protocols.push_back("Unknown");
-      payload = packet + sizeof(struct ether_header) + (ip_header->ip_hl << 2);
-      payload_length = header->len - (payload - packet);
-    }
-
-    source_port_vector.SetValue(index, Value::INTEGER(source_port));
-    dest_port_vector.SetValue(index, Value::INTEGER(dest_port));
-    tcp_session_vector.SetValue(
-        index, tcp_session.empty() ? Value() : Value(tcp_session));
+    source_port_vector.SetValue(index, Value::INTEGER(tl_info.source_port));
+    dest_port_vector.SetValue(index, Value::INTEGER(tl_info.dest_port));
+    length_vector.SetValue(index, Value::INTEGER(tl_info.payload_length));
+    tcp_session_vector.SetValue(index, tl_info.tcp_session.empty()
+                                           ? Value()
+                                           : Value(tl_info.tcp_session));
 
     // Set the payload as a BLOB
-    payload_vector.SetValue(index, Value::BLOB(payload, payload_length));
+    payload_vector.SetValue(
+        index, Value::BLOB(tl_info.payload, tl_info.payload_length));
 
     // Create a DuckDB list value from the protocols vector
     vector<Value> protocol_values;
@@ -294,7 +314,8 @@ PCAPReaderBind(ClientContext &context, TableFunctionBindInput &input,
 }
 
 static void LoadInternal(DatabaseInstance &instance) {
-  TableFunction pcap_reader("read_pcap", {LogicalType::ANY}, PCAPReaderFunction, PCAPReaderBind);
+  TableFunction pcap_reader("read_pcap", {LogicalType::ANY}, PCAPReaderFunction,
+                            PCAPReaderBind);
   ExtensionUtil::RegisterFunction(instance, pcap_reader);
   ScalarFunction is_http_func("is_http", {LogicalType::BLOB},
                               LogicalType::BOOLEAN, IsHTTPFunction);

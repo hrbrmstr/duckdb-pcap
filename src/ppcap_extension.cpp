@@ -36,7 +36,6 @@ struct PCAPData : public TableFunctionData {
   }
 };
 
-
 static string mac_to_string(const unsigned char* mac) {
     std::stringstream ss;
     ss << std::hex << std::setfill('0');
@@ -53,7 +52,6 @@ static string generate_tcp_session(const struct ip* ip_header, const struct tcph
        << inet_ntoa(ip_header->ip_dst) << ":" << ntohs(tcp_header->th_dport);
     return ss.str();
 }
-
 
 static void PCAPReaderFunction(ClientContext &context, TableFunctionInput &data_p, DataChunk &output) {
     auto &pcap_data = (PCAPData &)*data_p.bind_data;
@@ -72,6 +70,7 @@ static void PCAPReaderFunction(ClientContext &context, TableFunctionInput &data_
     Vector &source_mac_vector = output.data[7];
     Vector &dest_mac_vector = output.data[8];
     Vector &protocols_vector = output.data[9];
+    Vector &payload_vector = output.data[10];
 
     idx_t index = 0;
     while (index < STANDARD_VECTOR_SIZE) {
@@ -107,6 +106,8 @@ static void PCAPReaderFunction(ClientContext &context, TableFunctionInput &data_
         int source_port = 0;
         int dest_port = 0;
         string tcp_session;
+        const u_char *payload;
+        size_t payload_length;
 
         // Determine the transport layer protocol
         switch(ip_header->ip_p) {
@@ -116,6 +117,8 @@ static void PCAPReaderFunction(ClientContext &context, TableFunctionInput &data_
                 source_port = ntohs(tcp_header->th_sport);
                 dest_port = ntohs(tcp_header->th_dport);
                 tcp_session = generate_tcp_session(ip_header, tcp_header);
+                payload = packet + sizeof(struct ether_header) + (ip_header->ip_hl << 2) + (tcp_header->th_off << 2);
+                payload_length = header->len - (payload - packet);
                 break;
             }
             case IPPROTO_UDP: {
@@ -123,18 +126,27 @@ static void PCAPReaderFunction(ClientContext &context, TableFunctionInput &data_
                 struct udphdr *udp_header = (struct udphdr*)((char*)ip_header + (ip_header->ip_hl << 2));
                 source_port = ntohs(udp_header->uh_sport);
                 dest_port = ntohs(udp_header->uh_dport);
+                payload = packet + sizeof(struct ether_header) + (ip_header->ip_hl << 2) + sizeof(struct udphdr);
+                payload_length = header->len - (payload - packet);
                 break;
             }
             case IPPROTO_ICMP:
                 protocols.push_back("ICMP");
+                payload = packet + sizeof(struct ether_header) + (ip_header->ip_hl << 2);
+                payload_length = header->len - (payload - packet);
                 break;
             default:
                 protocols.push_back("Unknown");
+                payload = packet + sizeof(struct ether_header) + (ip_header->ip_hl << 2);
+                payload_length = header->len - (payload - packet);
         }
 
         source_port_vector.SetValue(index, Value::INTEGER(source_port));
         dest_port_vector.SetValue(index, Value::INTEGER(dest_port));
         tcp_session_vector.SetValue(index, tcp_session.empty() ? Value() : Value(tcp_session));
+
+        // Set the payload as a BLOB
+        payload_vector.SetValue(index, Value::BLOB(payload, payload_length));
 
         // Create a DuckDB list value from the protocols vector
         vector<Value> protocol_values;
@@ -155,13 +167,13 @@ static unique_ptr<FunctionData> PCAPReaderBind(ClientContext &context, TableFunc
         LogicalType::TIMESTAMP, LogicalType::VARCHAR, LogicalType::VARCHAR,
         LogicalType::INTEGER, LogicalType::INTEGER, LogicalType::INTEGER,
         LogicalType::VARCHAR, LogicalType::VARCHAR, LogicalType::VARCHAR,
-        LogicalType::LIST(LogicalType::VARCHAR)
+        LogicalType::LIST(LogicalType::VARCHAR), LogicalType::BLOB
     };
     names = {
         "timestamp", "source_ip", "dest_ip",
         "source_port", "dest_port", "length",
         "tcp_session", "source_mac", "dest_mac",
-        "protocols"
+        "protocols", "payload"
     };
 
     auto result = make_uniq<PCAPData>(input.inputs[0].GetValue<string>());

@@ -14,16 +14,10 @@
 #include <pcap.h>
 #include <netinet/ip.h>
 #include <netinet/tcp.h>
+#include <netinet/udp.h>
 #include <arpa/inet.h>
 
 namespace duckdb {
-
-struct PCAPPacket {
-    Timestamp timestamp;
-    string source_ip;
-    string dest_ip;
-    int32_t length;
-};
 
 struct PCAPData : public TableFunctionData {
   pcap_t *handle;
@@ -38,6 +32,10 @@ struct PCAPData : public TableFunctionData {
   }
 };
 
+#include <netinet/ip.h>
+#include <netinet/tcp.h>
+#include <netinet/udp.h>
+
 static void PCAPReaderFunction(ClientContext &context, TableFunctionInput &data_p, DataChunk &output) {
     auto &pcap_data = (PCAPData &)*data_p.bind_data;
 
@@ -49,6 +47,8 @@ static void PCAPReaderFunction(ClientContext &context, TableFunctionInput &data_
     Vector &source_ip_vector = output.data[1];
     Vector &dest_ip_vector = output.data[2];
     Vector &length_vector = output.data[3];
+    Vector &dest_port_vector = output.data[4];
+    Vector &protocols_vector = output.data[5];
 
     idx_t index = 0;
     while (index < STANDARD_VECTOR_SIZE) {
@@ -63,13 +63,50 @@ static void PCAPReaderFunction(ClientContext &context, TableFunctionInput &data_
             continue;
         }
 
-        struct ip *ip_header = (struct ip*)(packet + 14); // Skip Ethernet header
-
         double epoch_seconds = header->ts.tv_sec + header->ts.tv_usec / 1000000.0;
         timestamp_vector.SetValue(index, Value::TIMESTAMP(Timestamp::FromEpochSeconds(epoch_seconds)));
+
+        vector<string> protocols;
+        protocols.push_back("Ethernet");
+
+        struct ip *ip_header = (struct ip*)(packet + 14); // Skip Ethernet header
+        protocols.push_back("IP");
+
         source_ip_vector.SetValue(index, Value(inet_ntoa(ip_header->ip_src)));
         dest_ip_vector.SetValue(index, Value(inet_ntoa(ip_header->ip_dst)));
         length_vector.SetValue(index, Value::INTEGER(header->len));
+
+        int dest_port = 0;
+
+        // Determine the transport layer protocol
+        switch(ip_header->ip_p) {
+            case IPPROTO_TCP: {
+                protocols.push_back("TCP");
+                struct tcphdr *tcp_header = (struct tcphdr*)(packet + 14 + (ip_header->ip_hl << 2));
+                dest_port = ntohs(tcp_header->th_dport);
+                break;
+            }
+            case IPPROTO_UDP: {
+                protocols.push_back("UDP");
+                struct udphdr *udp_header = (struct udphdr*)(packet + 14 + (ip_header->ip_hl << 2));
+                dest_port = ntohs(udp_header->uh_dport);
+                break;
+            }
+            case IPPROTO_ICMP:
+                protocols.push_back("ICMP");
+                break;
+            default:
+                protocols.push_back("Unknown");
+        }
+
+        dest_port_vector.SetValue(index, Value::INTEGER(dest_port));
+
+        // Create a DuckDB list value from the protocols vector
+        vector<Value> protocol_values;
+        for (const auto& protocol : protocols) {
+            protocol_values.push_back(Value(protocol));
+        }
+        protocols_vector.SetValue(index, Value::LIST(LogicalType::VARCHAR, protocol_values));
 
         index++;
     }
@@ -77,10 +114,11 @@ static void PCAPReaderFunction(ClientContext &context, TableFunctionInput &data_
     output.SetCardinality(index);
 }
 
+
 static unique_ptr<FunctionData> PCAPReaderBind(ClientContext &context, TableFunctionBindInput &input,
                                                vector<LogicalType> &return_types, vector<string> &names) {
-    return_types = {LogicalType::TIMESTAMP, LogicalType::VARCHAR, LogicalType::VARCHAR, LogicalType::INTEGER};
-    names = {"timestamp", "source_ip", "dest_ip", "length"};
+    return_types = {LogicalType::TIMESTAMP, LogicalType::VARCHAR, LogicalType::VARCHAR, LogicalType::INTEGER, LogicalType::INTEGER, LogicalType::LIST(LogicalType::VARCHAR)};
+    names = {"timestamp", "source_ip", "dest_ip", "length", "dest_port", "protocols"};
 
     auto result = make_uniq<PCAPData>(input.inputs[0].GetValue<string>());
     char errbuf[PCAP_ERRBUF_SIZE];

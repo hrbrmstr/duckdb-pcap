@@ -27,18 +27,31 @@
 
 namespace duckdb {
 
-struct PCAPData : public TableFunctionData {
-  vector<string> filenames;
-  size_t current_file_index;
-  pcap_t *handle;
+struct PCAPData : public duckdb::FunctionData {
+    vector<string> filenames;
+    size_t current_file_index;
+    pcap_t *handle;
 
-  PCAPData() : current_file_index(0), handle(nullptr) {}
+    PCAPData() : current_file_index(0), handle(nullptr) {}
 
-  ~PCAPData() {
-    if (handle) {
-      pcap_close(handle);
+    ~PCAPData() {
+        if (handle) {
+            pcap_close(handle);
+        }
     }
-  }
+
+unique_ptr<FunctionData> Copy() const override {
+    auto copy = make_uniq<PCAPData>();
+    copy->filenames = filenames;
+    copy->current_file_index = current_file_index;
+    copy->handle = nullptr;  // Don't copy the handle, it will be reopened
+    return unique_ptr<FunctionData>(copy.release());
+}
+
+    bool Equals(const FunctionData &other) const override {
+        auto &o = (const PCAPData &)other;
+        return filenames == o.filenames && current_file_index == o.current_file_index;
+    }
 };
 
 struct TransportLayerInfo {
@@ -242,13 +255,22 @@ static string mac_to_string(const unsigned char *mac) {
   return ss.str();
 }
 
-static string generate_tcp_session(const struct ip *ip_header,
-                                   const struct tcphdr *tcp_header) {
-  std::stringstream ss;
-  ss << inet_ntoa(ip_header->ip_src) << ":" << ntohs(tcp_header->th_sport)
-     << "-" << inet_ntoa(ip_header->ip_dst) << ":"
-     << ntohs(tcp_header->th_dport);
-  return ss.str();
+std::string generate_tcp_session(const struct ip *ip_header, const struct tcphdr *tcp_header) {
+    std::stringstream ss;
+    ss << inet_ntoa(ip_header->ip_src) << ":"
+#ifdef __GLIBC__
+       << ntohs(tcp_header->source)
+#else
+       << ntohs(tcp_header->th_sport)
+#endif
+       << " -> "
+       << inet_ntoa(ip_header->ip_dst) << ":"
+#ifdef __GLIBC__
+       << ntohs(tcp_header->dest);
+#else
+       << ntohs(tcp_header->th_dport);
+#endif
+    return ss.str();
 }
 
 TransportLayerInfo determineTransportLayer(const struct ip *ip_header,
@@ -259,41 +281,53 @@ TransportLayerInfo determineTransportLayer(const struct ip *ip_header,
   info.dest_port = 0;
   info.tcp_seq_num = 0;
 
-  switch (ip_header->ip_p) {
-  case IPPROTO_TCP: {
-    info.protocols.push_back("TCP");
-    struct tcphdr *tcp_header =
-        (struct tcphdr *)((char *)ip_header + (ip_header->ip_hl << 2));
-    info.source_port = ntohs(tcp_header->th_sport);
-    info.dest_port = ntohs(tcp_header->th_dport);
-    info.tcp_session = generate_tcp_session(ip_header, tcp_header);
-    info.payload = packet + sizeof(struct ether_header) +
-                   (ip_header->ip_hl << 2) + (tcp_header->th_off << 2);
-    info.payload_length = header->len - (info.payload - packet);
-    info.tcp_seq_num = ntohl(tcp_header->th_seq); // Extract the sequence number
+      switch (ip_header->ip_p) {
+    case IPPROTO_TCP: {
+        info.protocols.push_back("TCP");
+        struct tcphdr *tcp_header =
+            (struct tcphdr *)((char *)ip_header + (ip_header->ip_hl << 2));
+#ifdef __GLIBC__
+        info.source_port = ntohs(tcp_header->source);
+        info.dest_port = ntohs(tcp_header->dest);
+        info.payload = packet + sizeof(struct ether_header) +
+                       (ip_header->ip_hl << 2) + (tcp_header->doff << 2);
+        info.tcp_seq_num = ntohl(tcp_header->seq);
 
-    // Add TCP flags (as before)
-    if (tcp_header->th_flags & TH_SYN)
-      info.tcp_flags.push_back("SYN");
-    if (tcp_header->th_flags & TH_ACK)
-      info.tcp_flags.push_back("ACK");
-    if (tcp_header->th_flags & TH_RST)
-      info.tcp_flags.push_back("RST");
-    if (tcp_header->th_flags & TH_FIN)
-      info.tcp_flags.push_back("FIN");
-    if (tcp_header->th_flags & TH_PUSH)
-      info.tcp_flags.push_back("PSH");
-    if (tcp_header->th_flags & TH_URG)
-      info.tcp_flags.push_back("URG");
+        if (tcp_header->syn) info.tcp_flags.push_back("SYN");
+        if (tcp_header->ack) info.tcp_flags.push_back("ACK");
+        if (tcp_header->rst) info.tcp_flags.push_back("RST");
+        if (tcp_header->fin) info.tcp_flags.push_back("FIN");
+        if (tcp_header->psh) info.tcp_flags.push_back("PSH");
+        if (tcp_header->urg) info.tcp_flags.push_back("URG");
+#else
+        info.source_port = ntohs(tcp_header->th_sport);
+        info.dest_port = ntohs(tcp_header->th_dport);
+        info.payload = packet + sizeof(struct ether_header) +
+                       (ip_header->ip_hl << 2) + (tcp_header->th_off << 2);
+        info.tcp_seq_num = ntohl(tcp_header->th_seq);
 
-    break;
-  }
-  case IPPROTO_UDP: {
-    info.protocols.push_back("UDP");
-    struct udphdr *udp_header =
-        (struct udphdr *)((char *)ip_header + (ip_header->ip_hl << 2));
-    info.source_port = ntohs(udp_header->uh_sport);
-    info.dest_port = ntohs(udp_header->uh_dport);
+        if (tcp_header->th_flags & TH_SYN) info.tcp_flags.push_back("SYN");
+        if (tcp_header->th_flags & TH_ACK) info.tcp_flags.push_back("ACK");
+        if (tcp_header->th_flags & TH_RST) info.tcp_flags.push_back("RST");
+        if (tcp_header->th_flags & TH_FIN) info.tcp_flags.push_back("FIN");
+        if (tcp_header->th_flags & TH_PUSH) info.tcp_flags.push_back("PSH");
+        if (tcp_header->th_flags & TH_URG) info.tcp_flags.push_back("URG");
+#endif
+        info.tcp_session = generate_tcp_session(ip_header, tcp_header);
+        info.payload_length = header->len - (info.payload - packet);
+        break;
+    }
+    case IPPROTO_UDP: {
+        info.protocols.push_back("UDP");
+        struct udphdr *udp_header =
+            (struct udphdr *)((char *)ip_header + (ip_header->ip_hl << 2));
+#ifdef __GLIBC__
+        info.source_port = ntohs(udp_header->source);
+        info.dest_port = ntohs(udp_header->dest);
+#else
+        info.source_port = ntohs(udp_header->uh_sport);
+        info.dest_port = ntohs(udp_header->uh_dport);
+#endif
     info.payload = packet + sizeof(struct ether_header) +
                    (ip_header->ip_hl << 2) + sizeof(struct udphdr);
     info.payload_length = header->len - (info.payload - packet);
@@ -592,7 +626,7 @@ PCAPReaderBind(ClientContext &context, TableFunctionBindInput &input,
            "length",    "tcp_session", "source_mac", "dest_mac",    "protocols",
            "payload",   "tcp_flags",   "tcp_seq_num"};
 
-  return result;
+    return unique_ptr<FunctionData>(result.release());
 }
 
 static void LoadInternal(DatabaseInstance &instance) {

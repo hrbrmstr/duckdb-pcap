@@ -1,16 +1,17 @@
-# `pcap`
+# `ppcap`
 
 This repository is based on https://github.com/duckdb/extension-template, check it out if you want to build and ship your own DuckDB extension.
 
 ---
 
-This extension, `pcap`, allow you to read pcap files.
+>Reading [this blog post](https://rud.is/b/2024/08/26/reading-pcap-files-directly-with-duckdb/) is likely a good idea, especially since it has binary extensions for Apple Silicon and amd64 Linux you can use immediately.
+
+This extension, `ppcap`, allow you to read pcap files.
 
 Eventually I'll get extensions built, so all you have to do is:
 
 ```sql
-INSTALL pcap;
-LOAD pcap;
+LOAD ppcap;
 ```
 
 For now, you gotta use it locally.

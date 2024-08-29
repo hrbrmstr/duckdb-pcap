@@ -25,33 +25,42 @@
 #include <sstream>
 #include <vector>
 
+#ifndef DLT_RAW1
+#define DLT_RAW1 101
+#endif
+
+#ifndef DLT_LOOP
+#define DLT_LOOP 108
+#endif
+
 namespace duckdb {
 
 struct PCAPData : public duckdb::FunctionData {
-    vector<string> filenames;
-    size_t current_file_index;
-    pcap_t *handle;
+  vector<string> filenames;
+  size_t current_file_index;
+  pcap_t *handle;
 
-    PCAPData() : current_file_index(0), handle(nullptr) {}
+  PCAPData() : current_file_index(0), handle(nullptr) {}
 
-    ~PCAPData() {
-        if (handle) {
-            pcap_close(handle);
-        }
+  ~PCAPData() {
+    if (handle) {
+      pcap_close(handle);
     }
+  }
 
-unique_ptr<FunctionData> Copy() const override {
+  unique_ptr<FunctionData> Copy() const override {
     auto copy = make_uniq<PCAPData>();
     copy->filenames = filenames;
     copy->current_file_index = current_file_index;
-    copy->handle = nullptr;  // Don't copy the handle, it will be reopened
+    copy->handle = nullptr; // Don't copy the handle, it will be reopened
     return unique_ptr<FunctionData>(copy.release());
-}
+  }
 
-    bool Equals(const FunctionData &other) const override {
-        auto &o = (const PCAPData &)other;
-        return filenames == o.filenames && current_file_index == o.current_file_index;
-    }
+  bool Equals(const FunctionData &other) const override {
+    auto &o = (const PCAPData &)other;
+    return filenames == o.filenames &&
+           current_file_index == o.current_file_index;
+  }
 };
 
 struct TransportLayerInfo {
@@ -81,13 +90,13 @@ struct ICMPInfo {
 #define ICMP_ECHO 8
 #define ICMP_TIME_EXCEEDED 11
 
-static std::string bytes_to_hex(const uint8_t* data, size_t len) {
-    std::stringstream ss;
-    ss << std::hex << std::setfill('0');
-    for (size_t i = 0; i < len; ++i) {
-        ss << std::setw(2) << static_cast<int>(data[i]);
-    }
-    return ss.str();
+static std::string bytes_to_hex(const uint8_t *data, size_t len) {
+  std::stringstream ss;
+  ss << std::hex << std::setfill('0');
+  for (size_t i = 0; i < len; ++i) {
+    ss << std::setw(2) << static_cast<int>(data[i]);
+  }
+  return ss.str();
 }
 
 bool starts_with_http_verb(const string &payload) {
@@ -255,22 +264,22 @@ static string mac_to_string(const unsigned char *mac) {
   return ss.str();
 }
 
-std::string generate_tcp_session(const struct ip *ip_header, const struct tcphdr *tcp_header) {
-    std::stringstream ss;
-    ss << inet_ntoa(ip_header->ip_src) << ":"
+std::string generate_tcp_session(const struct ip *ip_header,
+                                 const struct tcphdr *tcp_header) {
+  std::stringstream ss;
+  ss << inet_ntoa(ip_header->ip_src) << ":"
 #ifdef __GLIBC__
-       << ntohs(tcp_header->source)
+     << ntohs(tcp_header->source)
 #else
-       << ntohs(tcp_header->th_sport)
+     << ntohs(tcp_header->th_sport)
 #endif
-       << " -> "
-       << inet_ntoa(ip_header->ip_dst) << ":"
+     << " -> " << inet_ntoa(ip_header->ip_dst) << ":"
 #ifdef __GLIBC__
-       << ntohs(tcp_header->dest);
+     << ntohs(tcp_header->dest);
 #else
-       << ntohs(tcp_header->th_dport);
+     << ntohs(tcp_header->th_dport);
 #endif
-    return ss.str();
+  return ss.str();
 }
 
 TransportLayerInfo determineTransportLayer(const struct ip *ip_header,
@@ -281,188 +290,221 @@ TransportLayerInfo determineTransportLayer(const struct ip *ip_header,
   info.dest_port = 0;
   info.tcp_seq_num = 0;
 
-      switch (ip_header->ip_p) {
-    case IPPROTO_TCP: {
-        info.protocols.push_back("TCP");
-        struct tcphdr *tcp_header =
-            (struct tcphdr *)((char *)ip_header + (ip_header->ip_hl << 2));
-#ifdef __GLIBC__
-        info.source_port = ntohs(tcp_header->source);
-        info.dest_port = ntohs(tcp_header->dest);
-        info.payload = packet + sizeof(struct ether_header) +
-                       (ip_header->ip_hl << 2) + (tcp_header->doff << 2);
-        info.tcp_seq_num = ntohl(tcp_header->seq);
+  // std::cout << "IP Header proto: " << ip_header->ip_p << std::endl;
 
-        if (tcp_header->syn) info.tcp_flags.push_back("SYN");
-        if (tcp_header->ack) info.tcp_flags.push_back("ACK");
-        if (tcp_header->rst) info.tcp_flags.push_back("RST");
-        if (tcp_header->fin) info.tcp_flags.push_back("FIN");
-        if (tcp_header->psh) info.tcp_flags.push_back("PSH");
-        if (tcp_header->urg) info.tcp_flags.push_back("URG");
-#else
-        info.source_port = ntohs(tcp_header->th_sport);
-        info.dest_port = ntohs(tcp_header->th_dport);
-        info.payload = packet + sizeof(struct ether_header) +
-                       (ip_header->ip_hl << 2) + (tcp_header->th_off << 2);
-        info.tcp_seq_num = ntohl(tcp_header->th_seq);
-
-        if (tcp_header->th_flags & TH_SYN) info.tcp_flags.push_back("SYN");
-        if (tcp_header->th_flags & TH_ACK) info.tcp_flags.push_back("ACK");
-        if (tcp_header->th_flags & TH_RST) info.tcp_flags.push_back("RST");
-        if (tcp_header->th_flags & TH_FIN) info.tcp_flags.push_back("FIN");
-        if (tcp_header->th_flags & TH_PUSH) info.tcp_flags.push_back("PSH");
-        if (tcp_header->th_flags & TH_URG) info.tcp_flags.push_back("URG");
-#endif
-        info.tcp_session = generate_tcp_session(ip_header, tcp_header);
-        info.payload_length = header->len - (info.payload - packet);
-        break;
-    }
-    case IPPROTO_UDP: {
-        info.protocols.push_back("UDP");
-        struct udphdr *udp_header =
-            (struct udphdr *)((char *)ip_header + (ip_header->ip_hl << 2));
+  switch (ip_header->ip_p) {
+  case IPPROTO_TCP: {
+		// std::cout << "TCP" << std::endl;
+    info.protocols.push_back("TCP");
+    struct tcphdr *tcp_header = (struct tcphdr *)((char *)ip_header + (ip_header->ip_hl << 2));
 #ifdef __GLIBC__
-        info.source_port = ntohs(udp_header->source);
-        info.dest_port = ntohs(udp_header->dest);
+    info.source_port = ntohs(tcp_header->source);
+    info.dest_port = ntohs(tcp_header->dest);
+    info.payload = packet + (ip_header->ip_hl << 2) + (tcp_header->doff << 2);
+    info.tcp_seq_num = ntohl(tcp_header->seq);
+
+    if (tcp_header->syn)
+      info.tcp_flags.push_back("SYN");
+    if (tcp_header->ack)
+      info.tcp_flags.push_back("ACK");
+    if (tcp_header->rst)
+      info.tcp_flags.push_back("RST");
+    if (tcp_header->fin)
+      info.tcp_flags.push_back("FIN");
+    if (tcp_header->psh)
+      info.tcp_flags.push_back("PSH");
+    if (tcp_header->urg)
+      info.tcp_flags.push_back("URG");
 #else
-        info.source_port = ntohs(udp_header->uh_sport);
-        info.dest_port = ntohs(udp_header->uh_dport);
+    info.source_port = ntohs(tcp_header->th_sport);
+    info.dest_port = ntohs(tcp_header->th_dport);
+    info.payload = packet + (ip_header->ip_hl << 2) + (tcp_header->th_off << 2);
+    info.tcp_seq_num = ntohl(tcp_header->th_seq);
+
+    if (tcp_header->th_flags & TH_SYN)
+      info.tcp_flags.push_back("SYN");
+    if (tcp_header->th_flags & TH_ACK)
+      info.tcp_flags.push_back("ACK");
+    if (tcp_header->th_flags & TH_RST)
+      info.tcp_flags.push_back("RST");
+    if (tcp_header->th_flags & TH_FIN)
+      info.tcp_flags.push_back("FIN");
+    if (tcp_header->th_flags & TH_PUSH)
+      info.tcp_flags.push_back("PSH");
+    if (tcp_header->th_flags & TH_URG)
+      info.tcp_flags.push_back("URG");
 #endif
-    info.payload = packet + sizeof(struct ether_header) +
-                   (ip_header->ip_hl << 2) + sizeof(struct udphdr);
+    info.tcp_session = generate_tcp_session(ip_header, tcp_header);
+    if (info.payload >= packet && info.payload < packet + header->len) {
+			info.payload_length = header->len - (info.payload - packet);
+		} else {
+			// Handle error: payload pointer is out of bounds
+			info.payload_length = 0;
+			// You might want to set an error flag or log this issue
+		}
+    break;
+  }
+  case IPPROTO_UDP: {
+    info.protocols.push_back("UDP");
+    struct udphdr *udp_header =
+        (struct udphdr *)((char *)ip_header + (ip_header->ip_hl << 2));
+#ifdef __GLIBC__
+    info.source_port = ntohs(udp_header->source);
+    info.dest_port = ntohs(udp_header->dest);
+#else
+    info.source_port = ntohs(udp_header->uh_sport);
+    info.dest_port = ntohs(udp_header->uh_dport);
+#endif
+    info.payload = packet+ (ip_header->ip_hl << 2) + sizeof(struct udphdr);
     info.payload_length = header->len - (info.payload - packet);
     break;
   }
   case IPPROTO_ICMP:
     info.protocols.push_back("ICMP");
     info.payload =
-        packet + sizeof(struct ether_header) + (ip_header->ip_hl << 2);
+        packet + (ip_header->ip_hl << 2);
     info.payload_length = header->len - (info.payload - packet);
     break;
   default:
     info.protocols.push_back("Unknown");
-    info.payload =
-        packet + sizeof(struct ether_header) + (ip_header->ip_hl << 2);
+    info.payload = packet + (ip_header->ip_hl << 2);
     info.payload_length = header->len - (info.payload - packet);
   }
 
   return info;
 }
 
-static ICMPInfo extract_icmp_info(const uint8_t* icmp_packet, size_t packet_len) {
-    if (packet_len < 8) {  // Minimum ICMP header size
-        return {0, 0, "Invalid", "Packet too short", ""};
+static ICMPInfo extract_icmp_info(const uint8_t *icmp_packet,
+                                  size_t packet_len) {
+  if (packet_len < 8) { // Minimum ICMP header size
+    return {0, 0, "Invalid", "Packet too short", ""};
+  }
+
+  ICMPInfo info;
+  info.type = icmp_packet[0];
+  info.code = icmp_packet[1];
+
+  auto get_uint16 = [](const uint8_t *data) {
+    return (uint16_t)((data[0] << 8) | data[1]);
+  };
+
+  switch (info.type) {
+  case ICMP_ECHOREPLY:
+    info.type_name = "Echo Reply";
+    info.additional_info =
+        "ID: " + std::to_string(get_uint16(icmp_packet + 4)) +
+        ", Sequence: " + std::to_string(get_uint16(icmp_packet + 6));
+    if (packet_len > 8) {
+      size_t message_len =
+          std::min(packet_len - 8, (size_t)32); // Limit to 32 bytes
+      info.message = bytes_to_hex(icmp_packet + 8, message_len);
     }
-
-    ICMPInfo info;
-    info.type = icmp_packet[0];
-    info.code = icmp_packet[1];
-
-    auto get_uint16 = [](const uint8_t* data) {
-        return (uint16_t)((data[0] << 8) | data[1]);
-    };
-
-    switch (info.type) {
-        case ICMP_ECHOREPLY:
-            info.type_name = "Echo Reply";
-            info.additional_info = "ID: " + std::to_string(get_uint16(icmp_packet + 4)) +
-                                   ", Sequence: " + std::to_string(get_uint16(icmp_packet + 6));
-            if (packet_len > 8) {
-                size_t message_len = std::min(packet_len - 8, (size_t)32);  // Limit to 32 bytes
-                info.message = bytes_to_hex(icmp_packet + 8, message_len);
-            }
-            break;
-        case ICMP_DEST_UNREACH:
-            info.type_name = "Destination Unreachable";
-            switch (info.code) {
-                case 0: info.additional_info = "Network Unreachable"; break;
-                case 1: info.additional_info = "Host Unreachable"; break;
-                case 2: info.additional_info = "Protocol Unreachable"; break;
-                case 3: info.additional_info = "Port Unreachable"; break;
-                default: info.additional_info = "Code: " + std::to_string(info.code);
-            }
-            break;
-        case ICMP_SOURCE_QUENCH:
-            info.type_name = "Source Quench";
-            info.additional_info = "Request to slow down";
-            break;
-        case ICMP_REDIRECT:
-            info.type_name = "Redirect";
-            if (packet_len >= 12) {
-                char ip_str[INET_ADDRSTRLEN];
-                inet_ntop(AF_INET, icmp_packet + 4, ip_str, INET_ADDRSTRLEN);
-                info.additional_info = "Redirect to: " + std::string(ip_str);
-            } else {
-                info.additional_info = "Incomplete redirect information";
-            }
-            break;
-        case ICMP_ECHO:
-            info.type_name = "Echo Request";
-            info.additional_info = "ID: " + std::to_string(get_uint16(icmp_packet + 4)) +
-                                   ", Sequence: " + std::to_string(get_uint16(icmp_packet + 6));
-            if (packet_len > 8) {
-                size_t message_len = std::min(packet_len - 8, (size_t)32);  // Limit to 32 bytes
-                info.message = bytes_to_hex(icmp_packet + 8, message_len);
-            }
-            break;
-        case ICMP_TIME_EXCEEDED:
-            info.type_name = "Time Exceeded";
-            info.additional_info = (info.code == 0) ? "TTL exceeded" : "Fragment reassembly time exceeded";
-            break;
-        default:
-            info.type_name = "Other";
-            info.additional_info = "Type: " + std::to_string(info.type) + ", Code: " + std::to_string(info.code);
+    break;
+  case ICMP_DEST_UNREACH:
+    info.type_name = "Destination Unreachable";
+    switch (info.code) {
+    case 0:
+      info.additional_info = "Network Unreachable";
+      break;
+    case 1:
+      info.additional_info = "Host Unreachable";
+      break;
+    case 2:
+      info.additional_info = "Protocol Unreachable";
+      break;
+    case 3:
+      info.additional_info = "Port Unreachable";
+      break;
+    default:
+      info.additional_info = "Code: " + std::to_string(info.code);
     }
+    break;
+  case ICMP_SOURCE_QUENCH:
+    info.type_name = "Source Quench";
+    info.additional_info = "Request to slow down";
+    break;
+  case ICMP_REDIRECT:
+    info.type_name = "Redirect";
+    if (packet_len >= 12) {
+      char ip_str[INET_ADDRSTRLEN];
+      inet_ntop(AF_INET, icmp_packet + 4, ip_str, INET_ADDRSTRLEN);
+      info.additional_info = "Redirect to: " + std::string(ip_str);
+    } else {
+      info.additional_info = "Incomplete redirect information";
+    }
+    break;
+  case ICMP_ECHO:
+    info.type_name = "Echo Request";
+    info.additional_info =
+        "ID: " + std::to_string(get_uint16(icmp_packet + 4)) +
+        ", Sequence: " + std::to_string(get_uint16(icmp_packet + 6));
+    if (packet_len > 8) {
+      size_t message_len =
+          std::min(packet_len - 8, (size_t)32); // Limit to 32 bytes
+      info.message = bytes_to_hex(icmp_packet + 8, message_len);
+    }
+    break;
+  case ICMP_TIME_EXCEEDED:
+    info.type_name = "Time Exceeded";
+    info.additional_info =
+        (info.code == 0) ? "TTL exceeded" : "Fragment reassembly time exceeded";
+    break;
+  default:
+    info.type_name = "Other";
+    info.additional_info = "Type: " + std::to_string(info.type) + ", Code: " + std::to_string(info.code);
+  }
 
-    return info;
+  return info;
 }
 
-static void ExtractICMPTypeFunction(DataChunk &args, ExpressionState &state, Vector &result) {
-    auto &payload_vector = args.data[0];
+static void ExtractICMPTypeFunction(DataChunk &args, ExpressionState &state,
+                                    Vector &result) {
+  auto &payload_vector = args.data[0];
 
-    UnifiedVectorFormat payload_data;
-    payload_vector.ToUnifiedFormat(args.size(), payload_data);
+  UnifiedVectorFormat payload_data;
+  payload_vector.ToUnifiedFormat(args.size(), payload_data);
 
-    auto payloads = (string_t*)payload_data.data;
+  auto payloads = (string_t *)payload_data.data;
 
-    // Prepare the struct type for the result
-    child_list_t<LogicalType> struct_children = {
-        {"type", LogicalType::UTINYINT},
-        {"code", LogicalType::UTINYINT},
-        {"type_name", LogicalType::VARCHAR},
-        {"additional_info", LogicalType::VARCHAR},
-        {"message", LogicalType::VARCHAR}
-    };
-    auto struct_type = LogicalType::STRUCT(struct_children);
+  // Prepare the struct type for the result
+  child_list_t<LogicalType> struct_children = {
+      {"type", LogicalType::UTINYINT},
+      {"code", LogicalType::UTINYINT},
+      {"type_name", LogicalType::VARCHAR},
+      {"additional_info", LogicalType::VARCHAR},
+      {"message", LogicalType::VARCHAR}};
+  auto struct_type = LogicalType::STRUCT(struct_children);
 
-    for (idx_t i = 0; i < args.size(); i++) {
-        idx_t payload_idx = payload_data.sel->get_index(i);
+  for (idx_t i = 0; i < args.size(); i++) {
+    idx_t payload_idx = payload_data.sel->get_index(i);
 
-        if (!payload_data.validity.RowIsValid(payload_idx)) {
-            result.SetValue(i, Value());
-            continue;
-        }
-
-        const string_t &payload_str = payloads[payload_idx];
-        const uint8_t* payload = reinterpret_cast<const uint8_t*>(payload_str.GetDataUnsafe());
-        size_t payload_len = payload_str.GetSize();
-
-        ICMPInfo icmp_info = extract_icmp_info(payload, payload_len);
-
-        // Create a struct value with the ICMP information
-        child_list_t<Value> struct_values;
-        struct_values.push_back(make_pair("type", Value::UTINYINT(icmp_info.type)));
-        struct_values.push_back(make_pair("code", Value::UTINYINT(icmp_info.code)));
-        struct_values.push_back(make_pair("type_name", Value(icmp_info.type_name)));
-        struct_values.push_back(make_pair("additional_info", Value(icmp_info.additional_info)));
-        struct_values.push_back(make_pair("message", Value(icmp_info.message)));
-
-        result.SetValue(i, Value::STRUCT(struct_values));
+    if (!payload_data.validity.RowIsValid(payload_idx)) {
+      result.SetValue(i, Value());
+      continue;
     }
+
+    const string_t &payload_str = payloads[payload_idx];
+    const uint8_t *payload =
+        reinterpret_cast<const uint8_t *>(payload_str.GetDataUnsafe());
+    size_t payload_len = payload_str.GetSize();
+
+    ICMPInfo icmp_info = extract_icmp_info(payload, payload_len);
+
+    // Create a struct value with the ICMP information
+    child_list_t<Value> struct_values;
+    struct_values.push_back(make_pair("type", Value::UTINYINT(icmp_info.type)));
+    struct_values.push_back(make_pair("code", Value::UTINYINT(icmp_info.code)));
+    struct_values.push_back(make_pair("type_name", Value(icmp_info.type_name)));
+    struct_values.push_back(
+        make_pair("additional_info", Value(icmp_info.additional_info)));
+    struct_values.push_back(make_pair("message", Value(icmp_info.message)));
+
+    result.SetValue(i, Value::STRUCT(struct_values));
+  }
 }
 
 static void PCAPReaderFunction(ClientContext &context,
-                               TableFunctionInput &data_p, DataChunk &output) {
+																TableFunctionInput &data_p, DataChunk &output) {
   auto &pcap_data = (PCAPData &)*data_p.bind_data;
 
   struct pcap_pkthdr *header;
@@ -500,19 +542,19 @@ static void PCAPReaderFunction(ClientContext &context,
       pcap_data.current_file_index++;
     }
 
+		int linktype = pcap_datalink(pcap_data.handle);
+
     struct pcap_pkthdr *header;
     const u_char *packet;
     int result = pcap_next_ex(pcap_data.handle, &header, &packet);
 
-    if (result == -2) {
-      // End of file, close current file and move to next
+    if (result == -2) { // End of file, close current file and move to next
       pcap_close(pcap_data.handle);
       pcap_data.handle = nullptr;
       continue;
     } else if (result == -1) {
       throw std::runtime_error(pcap_geterr(pcap_data.handle));
-    } else if (result == 0) {
-      // Timeout, continue
+    } else if (result == 0) { // Timeout, continue
       continue;
     }
 
@@ -521,35 +563,55 @@ static void PCAPReaderFunction(ClientContext &context,
         index, Value::TIMESTAMP(Timestamp::FromEpochSeconds(epoch_seconds)));
 
     vector<string> protocols;
-    protocols.push_back("Ethernet");
+		const u_char *ip_packet;
 
-    // Parse Ethernet header
-    struct ether_header *eth_header = (struct ether_header *)packet;
-    source_mac_vector.SetValue(index,
-                               Value(mac_to_string(eth_header->ether_shost)));
-    dest_mac_vector.SetValue(index,
-                             Value(mac_to_string(eth_header->ether_dhost)));
+		// std::cout << "Linktype: " << linktype << std::endl;
 
-    struct ip *ip_header = (struct ip *)(packet + sizeof(struct ether_header));
+    if (linktype == DLT_EN10MB) { // Parse Ethernet header
+			protocols.push_back("Ethernet");
+			struct ether_header *eth_header = (struct ether_header *)packet;
+			source_mac_vector.SetValue(index, Value(mac_to_string(eth_header->ether_shost)));
+			dest_mac_vector.SetValue(index, Value(mac_to_string(eth_header->ether_dhost)));
+			ip_packet = packet + sizeof(struct ether_header);
+		} else if (linktype == DLT_RAW || linktype == DLT_IPV4 || linktype == DLT_RAW1 || linktype == DLT_LOOP) {
+      source_mac_vector.SetValue(index, Value()); // NULL for Raw IP
+      dest_mac_vector.SetValue(index, Value());   // NULL for Raw IP
+			ip_packet = packet;
+		} else {
+			continue;
+		}
+
+		// std::cout << "past ether" << std::endl;
+
+    struct ip *ip_header = (struct ip *)(ip_packet);
+
+		// std::cout << "ipv4: " << ip_header->ip_v << std::endl;
+
     protocols.push_back("IP");
 
     TransportLayerInfo tl_info =
         determineTransportLayer(ip_header, packet, header);
-    protocols.insert(protocols.end(), tl_info.protocols.begin(),
-                     tl_info.protocols.end());
+
+		// std::cout << "past tl_info" << std::endl;
+
+    protocols.insert(protocols.end(), tl_info.protocols.begin(), tl_info.protocols.end());
 
     source_ip_vector.SetValue(index, Value(inet_ntoa(ip_header->ip_src)));
     dest_ip_vector.SetValue(index, Value(inet_ntoa(ip_header->ip_dst)));
     source_port_vector.SetValue(index, Value::INTEGER(tl_info.source_port));
     dest_port_vector.SetValue(index, Value::INTEGER(tl_info.dest_port));
     length_vector.SetValue(index, Value::INTEGER(tl_info.payload_length));
-    tcp_session_vector.SetValue(index, tl_info.tcp_session.empty()
-                                           ? Value()
-                                           : Value(tl_info.tcp_session));
+    tcp_session_vector.SetValue(index, tl_info.tcp_session.empty() ? Value() : Value(tl_info.tcp_session));
+
+		// std::cout << "past tcp_session_vector" << std::endl;
+
+    // std::cout << "payload length: " << tl_info.payload_length << std::endl;
 
     // Set the payload as a BLOB
     payload_vector.SetValue(
         index, Value::BLOB(tl_info.payload, tl_info.payload_length));
+
+    // std::cout << "past blob" << std::endl;
 
     // Set TCP flags
     if (!tl_info.tcp_flags.empty()) {
@@ -557,11 +619,12 @@ static void PCAPReaderFunction(ClientContext &context,
       for (const auto &flag : tl_info.tcp_flags) {
         flag_values.push_back(Value(flag));
       }
-      tcp_flags_vector.SetValue(index,
-                                Value::LIST(LogicalType::VARCHAR, flag_values));
+      tcp_flags_vector.SetValue(index, Value::LIST(LogicalType::VARCHAR, flag_values));
     } else {
       tcp_flags_vector.SetValue(index, Value()); // NULL for non-TCP packets
     }
+
+    // std::cout << "past tcp_flags_vector" << std::endl;
 
     // Set TCP sequence number
     if (tl_info.protocols.back() == "TCP") {
@@ -569,6 +632,8 @@ static void PCAPReaderFunction(ClientContext &context,
     } else {
       tcp_seq_num_vector.SetValue(index, Value()); // NULL for non-TCP packets
     }
+
+		// std::cout << "past tcp_seq_num_vector" << std::endl;
 
     // Create a DuckDB list value from the protocols vector
     vector<Value> protocol_values;
@@ -626,7 +691,7 @@ PCAPReaderBind(ClientContext &context, TableFunctionBindInput &input,
            "length",    "tcp_session", "source_mac", "dest_mac",    "protocols",
            "payload",   "tcp_flags",   "tcp_seq_num"};
 
-    return unique_ptr<FunctionData>(result.release());
+  return unique_ptr<FunctionData>(result.release());
 }
 
 static void LoadInternal(DatabaseInstance &instance) {

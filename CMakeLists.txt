@@ -2,7 +2,11 @@ cmake_minimum_required(VERSION 3.5)
 
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
-set(CMAKE_TOOLCHAIN_FILE /root/dev//vcpkg/scripts/buildsystems/vcpkg.cmake
+set(BUILD_MAIN_DUCKDB_LIBRARY FALSE)
+set(EXTENSION_STATIC_BUILD ON)
+set(BUILD_EXTENSIONS_ONLY TRUE)
+
+set(CMAKE_TOOLCHAIN_FILE /root/dev/vcpkg/scripts/buildsystems/vcpkg.cmake
     CACHE STRING "Vcpkg toolchain file")
 
 

@@ -1,8 +1,8 @@
 # Show the tasks
-@default
+@default:
   just --list
 
 # build the project
 @build:
-  make
+  VCPKG_TOOLCHAIN_PATH=`pwd`/vcpkg/scripts/buildsystems/vcpkg.cmake BUILD_PPCAP=1 make release
   cp build/release/compile_commands.json .

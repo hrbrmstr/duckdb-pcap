@@ -32,7 +32,6 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
     ${CMAKE_CURRENT_SOURCE_DIR}/vcpkg/installed/x64-linux 
     ${CMAKE_CURRENT_SOURCE_DIR}/vcpkg/installed/x64-linux/lib 
     ${CMAKE_CURRENT_SOURCE_DIR}/vcpkg/installed/x64-linux/include 
-    ${CMAKE_CURRENT_SOURCE_DIR}/installed/x64-linux/share/openssl
   )
 elseif(CMAKE_SYSTEM_NAME STREQUAL "Darwin")
   if(CMAKE_SYSTEM_PROCESSOR MATCHES "arm64")

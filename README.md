@@ -4,16 +4,26 @@ This repository is based on https://github.com/duckdb/extension-template, check 
 
 ---
 
->Reading [this blog post](https://rud.is/b/2024/08/26/reading-pcap-files-directly-with-duckdb/) is likely a good idea, especially since it has binary extensions for Apple Silicon and amd64 Linux you can use immediately.
-
 This extension, `ppcap`, allow you to read pcap files.
 
+>Reading [this blog post](https://rud.is/b/2024/08/26/reading-pcap-files-directly-with-duckdb/) is likely a good idea.
 
-```sql
-LOAD ppcap;
+Binary versions of this extension are available for amd64 Linux (`linux_amd64`) and Apple Silicon. (`osx_arm64`).
+
+```bash
+$ duckdb -unsigned
+v1.0.0 1f98600c2c
+Enter ".help" for usage hints.
+Connected to a transient in-memory database.
+Use ".open FILENAME" to reopen on a persistent database.
+D SET custom_extension_repository='https://w3c2.c20.e2-5.dev/ppcap/latest';
+D INSTALL ppcap;
+D LOAD ppcap;
 ```
 
-For now, you gotta use it locally.
+---
+
+Only reading local PCAP files is supported.
 
 So far, this is what you get:
 

@@ -1,5 +1,7 @@
 cmake_minimum_required(VERSION 3.5)
 
+cmake_host_system_information(RESULT DISTRIB_ID QUERY DISTRIB_ID)
+
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 set(BUILD_MAIN_DUCKDB_LIBRARY FALSE)
@@ -26,13 +28,22 @@ include(${CMAKE_CURRENT_SOURCE_DIR}/FindPCAP.cmake)
 find_package(PCAP REQUIRED)
 
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
-  set(PCAP_ROOT_DIR ${CMAKE_CURRENT_SOURCE_DIR}/vcpkg/installed/x64-linux)
-  include_directories(
-    SYSTEM 
-    ${CMAKE_CURRENT_SOURCE_DIR}/vcpkg/installed/x64-linux 
-    ${CMAKE_CURRENT_SOURCE_DIR}/vcpkg/installed/x64-linux/lib 
-    ${CMAKE_CURRENT_SOURCE_DIR}/vcpkg/installed/x64-linux/include 
-  )
+  if(DISTRIB_ID STREQUAL "centos")
+    set(PCAP_ROOT_DIR ${CMAKE_CURRENT_SOURCE_DIR}/vcpkg/packages/libpcap_x64-linux)
+    include_directories(
+      ${CMAKE_CURRENT_SOURCE_DIR}/vcpkg/packages/libpcap_x64-linux
+      ${CMAKE_CURRENT_SOURCE_DIR}/vcpkg/packages/libpcap_x64-linux/lib
+      ${CMAKE_CURRENT_SOURCE_DIR}/vcpkg/packages/libpcap_x64-linux/include 
+    )
+  else()
+    set(PCAP_ROOT_DIR ${CMAKE_CURRENT_SOURCE_DIR}/vcpkg/installed/x64-linux)
+    include_directories(
+      SYSTEM 
+      ${CMAKE_CURRENT_SOURCE_DIR}/vcpkg/installed/x64-linux 
+      ${CMAKE_CURRENT_SOURCE_DIR}/vcpkg/installed/x64-linux/lib 
+      ${CMAKE_CURRENT_SOURCE_DIR}/vcpkg/installed/x64-linux/include 
+    )
+  endif()
 elseif(CMAKE_SYSTEM_NAME STREQUAL "Darwin")
   if(CMAKE_SYSTEM_PROCESSOR MATCHES "arm64")
     set(PCAP_ROOT_DIR ${CMAKE_CURRENT_SOURCE_DIR}vcpkg/installed/arm64-osx)

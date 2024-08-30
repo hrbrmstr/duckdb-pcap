@@ -8,7 +8,7 @@ This extension, `ppcap`, allow you to read pcap files.
 
 >Reading [this blog post](https://rud.is/b/2024/08/26/reading-pcap-files-directly-with-duckdb/) is likely a good idea.
 
-Binary versions of this extension are available for amd64 Linux (`linux_amd64`) and Apple Silicon. (`osx_arm64`).
+Binary versions of this extension are available for amd64 Linux (`linux_amd64` & `linux_amd64_gcc4`) and Apple Silicon. (`osx_arm64`).
 
 ```bash
 $ duckdb -unsigned
@@ -23,7 +23,7 @@ D LOAD ppcap;
 
 ---
 
-Only reading local PCAP files is supported.
+For now, only reading local PCAP files is supported.
 
 So far, this is what you get:
 

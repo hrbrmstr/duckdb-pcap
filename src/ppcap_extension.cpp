@@ -55,8 +55,7 @@ struct PCAPData : public duckdb::FunctionData {
 
   bool Equals(const FunctionData &other) const override {
     auto &o = (const PCAPData &)other;
-    return filenames == o.filenames &&
-           current_file_index == o.current_file_index;
+    return filenames == o.filenames && current_file_index == o.current_file_index;
   }
 };
 
@@ -165,8 +164,7 @@ static void ExtractHTTPRequestHeadersFunction(DataChunk &args,
 
     result.SetValue(
         i, Value::LIST(LogicalType::STRUCT({{"key", LogicalType::VARCHAR},
-                                            {"value", LogicalType::VARCHAR}}),
-                       headers));
+                                            {"value", LogicalType::VARCHAR}}), headers));
   }
 }
 
@@ -180,12 +178,12 @@ bool is_http(const uint8_t *payload, size_t payload_length) {
   std::string start(reinterpret_cast<const char *>(payload),
                     std::min(payload_length, size_t(16)));
   std::transform(start.begin(), start.end(), start.begin(),
-                 [](unsigned char c) { return std::tolower(c); });
+                  [](unsigned char c) { return std::tolower(c); });
 
   // Check for HTTP methods
-  static const char *http_methods[] = {"get ",     "post ",    "head ",
-                                       "put ",     "delete ",  "trace ",
-                                       "options ", "connect ", "patch "};
+    static const char *http_methods[] = { "get ",     "post ",    "head ",
+                                          "put ",     "delete ",  "trace ",
+                                          "options ", "connect ", "patch "};
   for (const auto &method : http_methods) {
     if (start.compare(0, strlen(method), method) == 0) {
       return true;
@@ -200,8 +198,7 @@ bool is_http(const uint8_t *payload, size_t payload_length) {
   return false;
 }
 
-static void IsHTTPFunction(DataChunk &args, ExpressionState &state,
-                           Vector &result) {
+static void IsHTTPFunction(DataChunk &args, ExpressionState &state, Vector &result) {
   auto &payload_vector = args.data[0];
   auto result_data = FlatVector::GetData<bool>(result);
 
@@ -228,11 +225,11 @@ static void IsHTTPFunction(DataChunk &args, ExpressionState &state,
     std::string start(reinterpret_cast<const char *>(payload.GetDataUnsafe()),
                       std::min(payload.GetSize(), (idx_t)16));
     std::transform(start.begin(), start.end(), start.begin(),
-                   [](unsigned char c) { return std::tolower(c); });
+                    [](unsigned char c) { return std::tolower(c); });
 
-    static const char *http_methods[] = {"get ",     "post ",    "head ",
-                                         "put ",     "delete ",  "trace ",
-                                         "options ", "connect ", "patch "};
+    static const char *http_methods[] = { "get ",     "post ",    "head ",
+                                          "put ",     "delete ",  "trace ",
+                                          "options ", "connect ", "patch "};
 
     result_data[i] = false;
     for (const auto &method : http_methods) {
@@ -266,15 +263,15 @@ std::string generate_tcp_session(const struct ip *ip_header,
   std::stringstream ss;
   ss << inet_ntoa(ip_header->ip_src) << ":"
 #ifdef __GLIBC__
-     << ntohs(tcp_header->source)
+    << ntohs(tcp_header->source)
 #else
-     << ntohs(tcp_header->th_sport)
+    << ntohs(tcp_header->th_sport)
 #endif
-     << " -> " << inet_ntoa(ip_header->ip_dst) << ":"
+    << " -> " << inet_ntoa(ip_header->ip_dst) << ":"
 #ifdef __GLIBC__
-     << ntohs(tcp_header->dest);
+    << ntohs(tcp_header->dest);
 #else
-     << ntohs(tcp_header->th_dport);
+    << ntohs(tcp_header->th_dport);
 #endif
   return ss.str();
 }
@@ -291,9 +288,10 @@ TransportLayerInfo determineTransportLayer(const struct ip *ip_header,
 
   switch (ip_header->ip_p) {
   case IPPROTO_TCP: {
-		// std::cout << "TCP" << std::endl;
+    // std::cout << "TCP" << std::endl;
     info.protocols.push_back("TCP");
-    struct tcphdr *tcp_header = (struct tcphdr *)((char *)ip_header + (ip_header->ip_hl << 2));
+    struct tcphdr *tcp_header =
+        (struct tcphdr *)((char *)ip_header + (ip_header->ip_hl << 2));
 #ifdef __GLIBC__
     info.source_port = ntohs(tcp_header->source);
     info.dest_port = ntohs(tcp_header->dest);
@@ -333,12 +331,12 @@ TransportLayerInfo determineTransportLayer(const struct ip *ip_header,
 #endif
     info.tcp_session = generate_tcp_session(ip_header, tcp_header);
     if (info.payload >= packet && info.payload < packet + header->len) {
-			info.payload_length = header->len - (info.payload - packet);
-		} else {
-			// Handle error: payload pointer is out of bounds
-			info.payload_length = 0;
-			// You might want to set an error flag or log this issue
-		}
+      info.payload_length = header->len - (info.payload - packet);
+    } else {
+      // Handle error: payload pointer is out of bounds
+      info.payload_length = 0;
+      // You might want to set an error flag or log this issue
+    }
     break;
   }
   case IPPROTO_UDP: {
@@ -352,14 +350,13 @@ TransportLayerInfo determineTransportLayer(const struct ip *ip_header,
     info.source_port = ntohs(udp_header->uh_sport);
     info.dest_port = ntohs(udp_header->uh_dport);
 #endif
-    info.payload = packet+ (ip_header->ip_hl << 2) + sizeof(struct udphdr);
+    info.payload = packet + (ip_header->ip_hl << 2) + sizeof(struct udphdr);
     info.payload_length = header->len - (info.payload - packet);
     break;
   }
   case IPPROTO_ICMP:
     info.protocols.push_back("ICMP");
-    info.payload =
-        packet + (ip_header->ip_hl << 2);
+    info.payload = packet + (ip_header->ip_hl << 2);
     info.payload_length = header->len - (info.payload - packet);
     break;
   default:
@@ -501,7 +498,7 @@ static void ExtractICMPTypeFunction(DataChunk &args, ExpressionState &state,
 }
 
 static void PCAPReaderFunction(ClientContext &context,
-																TableFunctionInput &data_p, DataChunk &output) {
+                                TableFunctionInput &data_p, DataChunk &output) {
   auto &pcap_data = (PCAPData &)*data_p.bind_data;
 
   struct pcap_pkthdr *header;
@@ -539,7 +536,7 @@ static void PCAPReaderFunction(ClientContext &context,
       pcap_data.current_file_index++;
     }
 
-		int linktype = pcap_datalink(pcap_data.handle);
+    int linktype = pcap_datalink(pcap_data.handle);
 
     struct pcap_pkthdr *header;
     const u_char *packet;
@@ -560,36 +557,36 @@ static void PCAPReaderFunction(ClientContext &context,
         index, Value::TIMESTAMP(Timestamp::FromEpochSeconds(epoch_seconds)));
 
     vector<string> protocols;
-		const u_char *ip_packet;
+    const u_char *ip_packet;
 
-		// std::cout << "Linktype: " << linktype << std::endl;
+    // std::cout << "Linktype: " << linktype << std::endl;
 
     if (linktype == DLT_EN10MB) { // Parse Ethernet header
-			protocols.push_back("Ethernet");
-			struct ether_header *eth_header = (struct ether_header *)packet;
-			source_mac_vector.SetValue(index, Value(mac_to_string(eth_header->ether_shost)));
-			dest_mac_vector.SetValue(index, Value(mac_to_string(eth_header->ether_dhost)));
-			ip_packet = packet + sizeof(struct ether_header);
-		} else if (linktype == DLT_RAW || linktype == DLT_IPV4 || linktype == DLT_RAW1 || linktype == DLT_LOOP) {
+      protocols.push_back("Ethernet");
+      struct ether_header *eth_header = (struct ether_header *)packet;
+      source_mac_vector.SetValue(index, Value(mac_to_string(eth_header->ether_shost)));
+      dest_mac_vector.SetValue(index, Value(mac_to_string(eth_header->ether_dhost)));
+      ip_packet = packet + sizeof(struct ether_header);
+    } else if (linktype == DLT_RAW || linktype == DLT_IPV4 || linktype == DLT_RAW1 || linktype == DLT_LOOP) {
       source_mac_vector.SetValue(index, Value()); // NULL for Raw IP
       dest_mac_vector.SetValue(index, Value());   // NULL for Raw IP
-			ip_packet = packet;
-		} else {
-			continue;
-		}
+      ip_packet = packet;
+    } else {
+      continue;
+    }
 
-		// std::cout << "past ether" << std::endl;
+    // std::cout << "past ether" << std::endl;
 
     struct ip *ip_header = (struct ip *)(ip_packet);
 
-		// std::cout << "ipv4: " << ip_header->ip_v << std::endl;
+    // std::cout << "ipv4: " << ip_header->ip_v << std::endl;
 
     protocols.push_back("IP");
 
     TransportLayerInfo tl_info =
         determineTransportLayer(ip_header, packet, header);
 
-		// std::cout << "past tl_info" << std::endl;
+    // std::cout << "past tl_info" << std::endl;
 
     protocols.insert(protocols.end(), tl_info.protocols.begin(), tl_info.protocols.end());
 
@@ -598,9 +595,11 @@ static void PCAPReaderFunction(ClientContext &context,
     source_port_vector.SetValue(index, Value::INTEGER(tl_info.source_port));
     dest_port_vector.SetValue(index, Value::INTEGER(tl_info.dest_port));
     length_vector.SetValue(index, Value::INTEGER(tl_info.payload_length));
-    tcp_session_vector.SetValue(index, tl_info.tcp_session.empty() ? Value() : Value(tl_info.tcp_session));
+    tcp_session_vector.SetValue(index, tl_info.tcp_session.empty()
+                                            ? Value()
+                                            : Value(tl_info.tcp_session));
 
-		// std::cout << "past tcp_session_vector" << std::endl;
+    // std::cout << "past tcp_session_vector" << std::endl;
 
     // std::cout << "payload length: " << tl_info.payload_length << std::endl;
 
@@ -616,7 +615,8 @@ static void PCAPReaderFunction(ClientContext &context,
       for (const auto &flag : tl_info.tcp_flags) {
         flag_values.push_back(Value(flag));
       }
-      tcp_flags_vector.SetValue(index, Value::LIST(LogicalType::VARCHAR, flag_values));
+      tcp_flags_vector.SetValue(index,
+                                Value::LIST(LogicalType::VARCHAR, flag_values));
     } else {
       tcp_flags_vector.SetValue(index, Value()); // NULL for non-TCP packets
     }
@@ -630,7 +630,7 @@ static void PCAPReaderFunction(ClientContext &context,
       tcp_seq_num_vector.SetValue(index, Value()); // NULL for non-TCP packets
     }
 
-		// std::cout << "past tcp_seq_num_vector" << std::endl;
+    // std::cout << "past tcp_seq_num_vector" << std::endl;
 
     // Create a DuckDB list value from the protocols vector
     vector<Value> protocol_values;
@@ -684,9 +684,9 @@ PCAPReaderBind(ClientContext &context, TableFunctionBindInput &input,
       LogicalType::BLOB,      LogicalType::LIST(LogicalType::VARCHAR),
       LogicalType::UINTEGER};
 
-  names = {"timestamp", "source_ip",   "dest_ip",    "source_port", "dest_port",
-           "length",    "tcp_session", "source_mac", "dest_mac",    "protocols",
-           "payload",   "tcp_flags",   "tcp_seq_num"};
+  names = { "timestamp", "source_ip",   "dest_ip",    "source_port", "dest_port",
+            "length",    "tcp_session", "source_mac", "dest_mac",    "protocols",
+            "payload",   "tcp_flags",   "tcp_seq_num"};
 
   return unique_ptr<FunctionData>(result.release());
 }
@@ -709,11 +709,12 @@ static void LoadInternal(DatabaseInstance &instance) {
 
   ScalarFunction extract_icmp_type_func(
       "extract_icmp_type", {LogicalType::BLOB},
-      LogicalType::STRUCT({{"type", LogicalType::UTINYINT},
-                           {"code", LogicalType::UTINYINT},
-                           {"type_name", LogicalType::VARCHAR},
-                           {"additional_info", LogicalType::VARCHAR},
-                           {"message", LogicalType::VARCHAR}}),
+      LogicalType::STRUCT({
+                    {"type", LogicalType::UTINYINT},
+                    {"code", LogicalType::UTINYINT},
+                    {"type_name", LogicalType::VARCHAR},
+                    {"additional_info", LogicalType::VARCHAR},
+                    {"message", LogicalType::VARCHAR}}),
       ExtractICMPTypeFunction);
   ExtensionUtil::RegisterFunction(instance, extract_icmp_type_func);
 }
